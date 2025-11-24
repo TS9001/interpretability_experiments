@@ -6,30 +6,51 @@ import re
 # Number pattern - matches integers and decimals, with optional commas
 NUMBER = r'\d[\d,]*(?:\.\d+)?'
 
-# Units/currency that can appear between number and operator
-# Allows: $, %, currency symbols, short units (up to 15 chars), but NOT long arbitrary text
-UNIT = r'(?:[$%€£¥]|[a-zA-Z]{1,15}(?:/[a-zA-Z]{1,10})?)?'
-
-# Whitespace (including none)
-WS = r'\s*'
-
-# Operators: +, -, *, /, x, X, ×, ÷
-# Note: 'x' and 'X' are used for multiplication in text like "5x5" or "5 x 5"
-OPERATORS = r'[+\-*/xX×÷·]'
-
-# Main operand pattern:
-# number (optional unit) whitespace operator whitespace (optional unit) number
-# This captures: "5+3", "5 + 3", "$5 + $3", "5x5", "5 X 5", "10 miles * 2"
-OPERAND_PATTERN = re.compile(
-    rf'({NUMBER}){WS}{UNIT}{WS}({OPERATORS}){WS}{UNIT}{WS}({NUMBER})',
-    re.IGNORECASE
-)
-
 # Pattern to extract content inside <<>> tags
 BRACKET_CONTENT = re.compile(r'<<([^>]+)>>')
 
 # Pattern to find all <<...>> tags (to remove them for "outside" analysis)
 BRACKET_TAGS = re.compile(r'<<[^>]+>>')
+
+# =============================================================================
+# COMPACT PATTERN (for inside <<>> brackets)
+# Matches: 5+3, 100/4, 20*35, 5-2 (no spaces, numbers only)
+# =============================================================================
+COMPACT_PATTERN = re.compile(
+    rf'({NUMBER})([+\-*/×÷])({NUMBER})'
+)
+
+# =============================================================================
+# SPACED PATTERN (for outside brackets - requires spaces around operator)
+# This avoids matching rates like "20/hour" or "$30/hour"
+# Matches: "5 + 3", "100 / 4", "25 x 12", "30 - 20"
+# Also matches with units: "100 miles / 4 gallons", "5 years + 3 years"
+# =============================================================================
+
+# Units that can appear after a number (before operator)
+# Handles: miles, years, hours, dollars, gallons, etc.
+# Can be multi-word like "miles per gallon"
+UNIT_BEFORE = r'(?:\s+[a-zA-Z]+(?:\s+[a-zA-Z]+){0,3})?'  # up to 4 words
+
+# Units/currency that can appear before a number (after operator)
+UNIT_AFTER = r'(?:[$€£¥]\s*)?'  # optional currency symbol
+
+# Operators with required spaces: +, -, *, /, x, X, ×, ÷
+# The 'x' and 'X' are multiplication in text like "5 x 5"
+SPACED_OPERATORS = r'[+\-*/xX×÷·]'
+
+# Spaced pattern - requires at least one space around the operator
+SPACED_PATTERN = re.compile(
+    rf'({NUMBER}){UNIT_BEFORE}\s+({SPACED_OPERATORS})\s+{UNIT_AFTER}({NUMBER})',
+    re.IGNORECASE
+)
+
+# =============================================================================
+# COMPACT WITH X (for cases like "5x3" without spaces)
+# =============================================================================
+COMPACT_X_PATTERN = re.compile(
+    rf'({NUMBER})([xX×])({NUMBER})'
+)
 
 
 def normalize_operator(op: str) -> str:
@@ -45,35 +66,102 @@ def normalize_operator(op: str) -> str:
     return op
 
 
-def find_operations(text: str) -> list[tuple[str, str, str, str]]:
+def find_operations_compact(text: str) -> list[tuple[str, str, str, str]]:
     """
-    Find all arithmetic operations in text.
+    Find arithmetic operations in compact form (no spaces).
+    Used for inside <<>> brackets.
 
     Returns list of tuples: (num1, operator, num2, normalized_operator)
     """
-    matches = OPERAND_PATTERN.findall(text)
     results = []
-    for num1, op, num2 in matches:
+    # Use finditer with overlapping search to catch chained operations like 16-3-4
+    pos = 0
+    while pos < len(text):
+        match = COMPACT_PATTERN.search(text, pos)
+        if not match:
+            break
+        num1, op, num2 = match.groups()
         norm_op = normalize_operator(op)
         results.append((num1, op, num2, norm_op))
+        # Move position to start of num2 to catch chained operations (e.g., 16-3-4)
+        # Find where num2 starts in the match
+        pos = match.start() + len(num1) + len(op)
+    return results
+
+
+def find_operations_spaced(text: str) -> list[tuple[str, str, str, str]]:
+    """
+    Find arithmetic operations for outside <<>> brackets.
+    Uses both spaced patterns (with units) and compact patterns (number op number).
+
+    Compact pattern safely handles rates like "20/hour" because it requires
+    both operands to be numbers.
+
+    Returns list of tuples: (num1, operator, num2, normalized_operator)
+    """
+    results = []
+    seen = set()  # Track unique operations to avoid duplicates
+
+    # First find spaced operations with overlapping search (handles "16 - 3 - 4")
+    pos = 0
+    while pos < len(text):
+        match = SPACED_PATTERN.search(text, pos)
+        if not match:
+            break
+        num1, op, num2 = match.groups()
+        norm_op = normalize_operator(op)
+        key = (num1, norm_op, num2)
+        if key not in seen:
+            seen.add(key)
+            results.append((num1, op, num2, norm_op))
+        # Find where num2 starts in the matched text to catch chained operations
+        # Match end is after num2, so we need to find where num2 starts
+        match_text = match.group(0)
+        num2_start_in_match = match_text.rfind(num2)
+        pos = match.start() + num2_start_in_match
+
+    # Also find compact operations (handles "3*7", "5+2", "100/4")
+    # This is safe because it requires NUMBER on both sides
+    pos = 0
+    while pos < len(text):
+        match = COMPACT_PATTERN.search(text, pos)
+        if not match:
+            break
+        num1, op, num2 = match.groups()
+        norm_op = normalize_operator(op)
+        key = (num1, norm_op, num2)
+        if key not in seen:
+            seen.add(key)
+            results.append((num1, op, num2, norm_op))
+        pos = match.start() + len(num1) + len(op)
+
+    # Also find compact "NxN" patterns (multiplication with x/X)
+    x_matches = COMPACT_X_PATTERN.findall(text)
+    for num1, op, num2 in x_matches:
+        norm_op = normalize_operator(op)
+        key = (num1, norm_op, num2)
+        if key not in seen:
+            seen.add(key)
+            results.append((num1, op, num2, norm_op))
+
     return results
 
 
 def find_operations_inside_brackets(answer: str) -> list[tuple[str, str, str, str]]:
-    """Find operations inside <<>> brackets."""
+    """Find operations inside <<>> brackets using compact pattern."""
     bracket_contents = BRACKET_CONTENT.findall(answer)
     all_ops = []
     for content in bracket_contents:
-        ops = find_operations(content)
+        ops = find_operations_compact(content)
         all_ops.extend(ops)
     return all_ops
 
 
 def find_operations_outside_brackets(answer: str) -> list[tuple[str, str, str, str]]:
-    """Find operations outside <<>> brackets."""
+    """Find operations outside <<>> brackets using spaced pattern."""
     # Remove all <<...>> content
     text_without_brackets = BRACKET_TAGS.sub('', answer)
-    return find_operations(text_without_brackets)
+    return find_operations_spaced(text_without_brackets)
 
 
 def count_operations_by_type(operations: list[tuple[str, str, str, str]]) -> dict[str, int]:
@@ -87,24 +175,40 @@ def count_operations_by_type(operations: list[tuple[str, str, str, str]]) -> dic
 
 if __name__ == "__main__":
     # Test the patterns
-    test_cases = [
+    print("=== COMPACT PATTERN (inside brackets) ===")
+    compact_tests = [
         "5+3",
-        "5 + 3",
-        "5*3",
-        "5 x 3",
-        "5X3",
-        "10 - 5",
-        "20/4",
-        "20 / 4",
-        "$5 + $3",
-        "5 miles * 2",
-        "30 years - 20 years",
-        "2 trains * 80 miles",
-        "He eats 3*7 = 21 eggs",
-        "<<16-3-4=9>>9",
-        "The result is 5+3=<<5+3=8>>8 apples.",
+        "100/4",
+        "20*35",
+        "16-3-4=9",
+        "5*2=10",
     ]
-
-    for test in test_cases:
-        ops = find_operations(test)
+    for test in compact_tests:
+        ops = find_operations_compact(test)
         print(f"{test!r} -> {ops}")
+
+    print("\n=== SPACED PATTERN (outside brackets) ===")
+    spaced_tests = [
+        "5 + 3",
+        "100 / 4",
+        "5 x 3",
+        "5X3",  # compact X should still work
+        "20x20",  # compact X
+        "10 - 5",
+        "$20/hour * 35 hours/week",  # should NOT match 20/hour
+        "100 miles / 4 gallons",  # should match
+        "25 miles per gallon x 12 gallons",  # should match
+        "30 years - 20 years",
+        "99 + 5 = $104",
+        "16 - 3 - 4 = 9",  # chained: should find 16-3 AND 3-4
+        "3 hours - 1 hour - 1 hour = 1 hour",  # chained with units
+    ]
+    for test in spaced_tests:
+        ops = find_operations_spaced(test)
+        print(f"{test!r} -> {ops}")
+
+    print("\n=== FULL EXAMPLE ===")
+    example = "First find: $20/hour * 35 hours/week = $<<20*35=700>>700/week"
+    print(f"Text: {example!r}")
+    print(f"Inside brackets: {find_operations_inside_brackets(example)}")
+    print(f"Outside brackets: {find_operations_outside_brackets(example)}")
