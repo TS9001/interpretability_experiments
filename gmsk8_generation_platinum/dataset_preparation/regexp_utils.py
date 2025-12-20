@@ -15,9 +15,10 @@ BRACKET_TAGS = re.compile(r'<<[^>]+>>')
 # =============================================================================
 # COMPACT PATTERN (for inside <<>> brackets)
 # Matches: 5+3, 100/4, 20*35, 5-2 (no spaces, numbers only)
+# Also handles unicode dashes: en-dash (–) and em-dash (—)
 # =============================================================================
 COMPACT_PATTERN = re.compile(
-    rf'({NUMBER})([+\-*/×÷])({NUMBER})'
+    rf'({NUMBER})([+\-*/×÷\u2013\u2014])({NUMBER})'
 )
 
 # =============================================================================
@@ -37,7 +38,8 @@ UNIT_AFTER = r'(?:[$€£¥]\s*)?'  # optional currency symbol
 
 # Operators with required spaces: +, -, *, /, x, X, ×, ÷
 # The 'x' and 'X' are multiplication in text like "5 x 5"
-SPACED_OPERATORS = r'[+\-*/xX×÷·]'
+# Also includes unicode dashes: en-dash (–) U+2013, em-dash (—) U+2014
+SPACED_OPERATORS = r'[+\-*/xX×÷·\u2013\u2014]'
 
 # Spaced pattern - requires at least one space around the operator
 SPACED_PATTERN = re.compile(
@@ -52,12 +54,29 @@ COMPACT_X_PATTERN = re.compile(
     rf'({NUMBER})([xX×])({NUMBER})'
 )
 
+# =============================================================================
+# ASYMMETRIC SPACED PATTERN (for cases like "45 -40" or "2 +2")
+# Space on one side only - catches operations missed by both SPACED and COMPACT
+# =============================================================================
+# Basic operators only (not x/X which could be variable names)
+ASYMMETRIC_OPS = r'[+\-*/÷\u2013\u2014]'
+
+# Pattern 1: space before operator, no space after (e.g., "45 -40")
+ASYMMETRIC_PATTERN_1 = re.compile(
+    rf'({NUMBER})\s+({ASYMMETRIC_OPS})({NUMBER})'
+)
+
+# Pattern 2: no space before operator, space after (e.g., "4- 2")
+ASYMMETRIC_PATTERN_2 = re.compile(
+    rf'({NUMBER})({ASYMMETRIC_OPS})\s+({NUMBER})'
+)
+
 
 def normalize_operator(op: str) -> str:
     """Normalize operator to standard form: +, -, *, /"""
     if op in ['+']:
         return '+'
-    elif op in ['-']:
+    elif op in ['-', '\u2013', '\u2014']:  # minus, en-dash, em-dash
         return '-'
     elif op in ['*', 'x', 'X', '×', '·']:
         return '*'
@@ -144,6 +163,22 @@ def find_operations_spaced(text: str) -> list[tuple[str, str, str, str]]:
             seen.add(key)
             results.append((num1, op, num2, norm_op))
 
+    # Also find asymmetric spaced patterns (space on one side only)
+    # Pattern 1: "45 -40" (space before operator)
+    for pattern in [ASYMMETRIC_PATTERN_1, ASYMMETRIC_PATTERN_2]:
+        pos = 0
+        while pos < len(text):
+            match = pattern.search(text, pos)
+            if not match:
+                break
+            num1, op, num2 = match.groups()
+            norm_op = normalize_operator(op)
+            key = (num1, norm_op, num2)
+            if key not in seen:
+                seen.add(key)
+                results.append((num1, op, num2, norm_op))
+            pos = match.start() + len(num1) + 1  # Move past first number
+
     return results
 
 
@@ -182,6 +217,8 @@ if __name__ == "__main__":
         "20*35",
         "16-3-4=9",
         "5*2=10",
+        "20–12=8",  # en-dash
+        "115—15=100",  # em-dash
     ]
     for test in compact_tests:
         ops = find_operations_compact(test)
@@ -202,6 +239,13 @@ if __name__ == "__main__":
         "99 + 5 = $104",
         "16 - 3 - 4 = 9",  # chained: should find 16-3 AND 3-4
         "3 hours - 1 hour - 1 hour = 1 hour",  # chained with units
+        # Asymmetric spacing tests
+        "45 -40 = 5",  # space before minus only
+        "2 +2 = 4",  # space before plus only
+        "4*2 +2 = 10",  # mixed: compact then asymmetric
+        # Unicode dash tests
+        "20 – 12 = 8",  # en-dash with spaces
+        "total gnomes – 12 gnomes = 8",  # en-dash in sentence
     ]
     for test in spaced_tests:
         ops = find_operations_spaced(test)

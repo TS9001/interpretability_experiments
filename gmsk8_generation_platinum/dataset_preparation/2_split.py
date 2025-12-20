@@ -1,10 +1,17 @@
 #!/usr/bin/env python3
 """
 Split GSM8K dataset into matching and non-matching examples.
+
 Matching = operations inside <<>> tags match operations outside <<>> tags.
+
+Usage:
+    python 2_split.py
+
+Input:  resources/gsm8k/train.jsonl, test.jsonl
+Output: resources/gsm8k_split/matching/*.jsonl
+        resources/gsm8k_split/nonmatching/*.jsonl
 """
 import json
-import sys
 from pathlib import Path
 
 from regexp_utils import (
@@ -114,15 +121,16 @@ def main():
 
     # Summary
     total = total_matching + total_nonmatching
-    print(f"\n{'='*60}")
-    print(f"SUMMARY")
-    print(f"{'='*60}")
-    print(f"Matching examples:     {total_matching:,} ({total_matching/total*100:.1f}%)")
-    print(f"Non-matching examples: {total_nonmatching:,} ({total_nonmatching/total*100:.1f}%)")
-    print(f"Total:                 {total:,}")
-    print(f"\nOutput saved to:")
-    print(f"  Matching:     {matching_dir}/")
-    print(f"  Non-matching: {nonmatching_dir}/")
+    if total > 0:
+        print(f"\n{'='*60}")
+        print(f"SUMMARY")
+        print(f"{'='*60}")
+        print(f"Matching examples:     {total_matching:,} ({total_matching/total*100:.1f}%)")
+        print(f"Non-matching examples: {total_nonmatching:,} ({total_nonmatching/total*100:.1f}%)")
+        print(f"Total:                 {total:,}")
+        print(f"\nOutput saved to:")
+        print(f"  Matching:     {matching_dir}/")
+        print(f"  Non-matching: {nonmatching_dir}/")
 
 
 if __name__ == "__main__":
