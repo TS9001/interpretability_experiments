@@ -52,6 +52,20 @@ Adds detailed operation info (operand1, operator, operand2, result) to matching 
 - Output: `resources/gsm8k_split/matching/train_enhanced.jsonl`
 - Output: `resources/gsm8k_split/matching/test_enhanced.jsonl`
 
+### Step 4: Tokenize and Find Token Positions
+
+```bash
+python 4_tokenize.py
+```
+
+Tokenizes the answer text and finds token positions for each operation's components:
+- Uses Qwen Math tokenizer (`Qwen/Qwen2.5-Math-1.5B`) by default
+- Cleans answer text by removing `<<...>>` brackets (keeps result)
+- Finds token indices for operand1, operator, operand2, and result
+- Output: `resources/gsm8k_split/matching/train_tokenized.jsonl`
+- Output: `resources/gsm8k_split/matching/test_tokenized.jsonl`
+- Damaged (incomplete patterns): `*_tokenized_damaged.jsonl`
+
 ## How It Works
 
 ### Matching Detection
@@ -78,6 +92,7 @@ gmsk8_generation_platinum/dataset_preparation/
 ├── 1_download.py       # Download GSM8K-Platinum
 ├── 2_split.py          # Split into matching/non-matching
 ├── 3_enhance.py        # Add detailed operation info
+├── 4_tokenize.py       # Tokenize and find token positions
 ├── regexp_utils.py     # Core regex utilities
 └── resources/
     └── gsm8k_split/
@@ -85,7 +100,11 @@ gmsk8_generation_platinum/dataset_preparation/
         │   ├── train.jsonl
         │   ├── test.jsonl
         │   ├── train_enhanced.jsonl
-        │   └── test_enhanced.jsonl
+        │   ├── test_enhanced.jsonl
+        │   ├── train_tokenized.jsonl
+        │   ├── test_tokenized.jsonl
+        │   ├── train_tokenized_damaged.jsonl
+        │   └── test_tokenized_damaged.jsonl
         └── nonmatching/
             ├── train.jsonl
             └── test.jsonl
@@ -102,6 +121,34 @@ Each enhanced example contains:
   "final_result": 8,
   "operations": [
     {"operand1": 5, "operator": "add", "operand2": 3, "result": 8}
+  ],
+  "operation_sequence": ["add"],
+  "operations_by_type": {"add": 1, "sub": 0, "mult": 0, "div": 0},
+  "total_operations": 1
+}
+```
+
+## Output Format (Tokenized)
+
+Each tokenized example contains token positions for each operation:
+```json
+{
+  "index": 42,
+  "question": "John has 5 apples and buys 3 more...",
+  "answer_clean": "First, 5 + 3 = 8 apples...",
+  "tokens": ["First", ",", " ", "5", " ", "+", " ", "3", " ", "=", " ", "8", ...],
+  "final_result": 8,
+  "operations": [
+    {
+      "operand1": 5,
+      "operand1_positions": [3],
+      "operator": "add",
+      "operator_positions": [5],
+      "operand2": 3,
+      "operand2_positions": [7],
+      "result": 8,
+      "result_positions": [11]
+    }
   ],
   "operation_sequence": ["add"],
   "operations_by_type": {"add": 1, "sub": 0, "mult": 0, "div": 0},

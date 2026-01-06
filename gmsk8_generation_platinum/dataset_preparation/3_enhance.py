@@ -201,6 +201,22 @@ def extract_final_result(answer: str):
     return None
 
 
+def mark_intermediate_operations(operations: list[dict]) -> None:
+    """
+    Mark operations as intermediate if their result feeds into the next operation.
+
+    An operation is intermediate if its result equals the next operation's operand1.
+    This indicates chained calculations where the intermediate result may not
+    appear explicitly in the text.
+    """
+    for i, op in enumerate(operations):
+        if i < len(operations) - 1:
+            next_op = operations[i + 1]
+            op['is_intermediate'] = (op['result'] == next_op['operand1'])
+        else:
+            op['is_intermediate'] = False
+
+
 def enhance_jsonl(input_path: Path, output_path: Path):
     """Read a JSONL file and enhance each entry with detailed operation info."""
     enhanced_entries = []
@@ -211,6 +227,7 @@ def enhance_jsonl(input_path: Path, output_path: Path):
 
             # Extract detailed operations
             operations = extract_operations_from_answer(entry['answer'])
+            mark_intermediate_operations(operations)
             operation_sequence = [op['operator'] for op in operations]
             final_result = extract_final_result(entry['answer'])
 
