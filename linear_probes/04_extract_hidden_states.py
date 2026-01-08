@@ -5,9 +5,15 @@ POC Step 2: Extract hidden states at operation positions.
 Extracts hidden states at operand, operator, and result token positions
 for training linear probes.
 
+Automatically detects CUDA/MPS/CPU and optimizes accordingly:
+- CUDA (H100): Uses bfloat16, Flash Attention 2, TF32, large batches
+- MPS (Apple): Uses float32, smaller batches
+- CPU: Fallback mode
+
 Usage:
-    python poc_02_extract_hidden_states.py
-    python poc_02_extract_hidden_states.py --layers 0,7,14,21,27 --batch-size 4
+    python 04_extract_hidden_states.py
+    python 04_extract_hidden_states.py --layers 0,7,14,21,27 --batch-size 4
+    python 04_extract_hidden_states.py --batch-size 32  # H100 with 80GB VRAM
 """
 from pathlib import Path
 from typing import Optional
@@ -32,6 +38,22 @@ DEFAULT_LAYERS = "0,7,14,21,27"
 
 # POC Probes
 POC_PROBES = ['B1', 'B2', 'C1', 'D1', 'D2']
+
+
+def get_default_batch_size(device: torch.device) -> int:
+    """Get recommended batch size for device."""
+    if device.type == "cuda":
+        # H100 80GB can handle large batches for hidden state extraction
+        mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+        if mem_gb >= 70:  # H100 80GB
+            return 32
+        elif mem_gb >= 40:  # A100 40GB
+            return 16
+        else:
+            return 8
+    elif device.type == "mps":
+        return 4
+    return 2  # CPU
 
 
 def get_magnitude_bin(value: float) -> int:
@@ -213,7 +235,7 @@ def main(
     input_file: Optional[Path] = typer.Option(None, "--input", "-i", help="Input probeable JSON"),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     layers: str = typer.Option(DEFAULT_LAYERS, "--layers", "-l", help="Layers to extract (comma-separated)"),
-    batch_size: int = typer.Option(4, "--batch-size", "-b", help="Batch size (H100: 32-64 for 1.5B model)"),
+    batch_size: int = typer.Option(0, "--batch-size", "-b", help="Batch size (0=auto-detect, H100: 32-64)"),
     max_examples: int = typer.Option(-1, "--max-examples", "-n", help="Max examples to process (-1=all)"),
     no_flash_attn: bool = typer.Option(False, "--no-flash-attn", help="Disable Flash Attention 2"),
 ):
@@ -228,6 +250,12 @@ def main(
     output_path.mkdir(parents=True, exist_ok=True)
     layer_indices = parse_csv_ints(layers)
 
+    # Get device and auto-detect batch size
+    device = get_device()
+    if batch_size <= 0:
+        batch_size = get_default_batch_size(device)
+        log.info(f"Auto-detected batch size: {batch_size}")
+
     print_header("POC Hidden State Extraction", "Step 2")
     print_config("Configuration", {
         'input': str(input_path),
@@ -239,7 +267,6 @@ def main(
     })
 
     # Load model
-    device = get_device()
     log.info(f"Loading model on {device}...")
     model, tokenizer = load_model_and_tokenizer(
         MODEL_NAME, device, use_flash_attn=not no_flash_attn

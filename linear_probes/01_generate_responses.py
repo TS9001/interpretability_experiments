@@ -5,10 +5,15 @@ Step 1: Generate responses (batch processing only).
 Fast batched generation to collect responses. Analysis of operations/correctness
 should be done in a separate script using the proper regexp_utils.py.
 
+Automatically detects CUDA/MPS/CPU and optimizes accordingly:
+- CUDA (H100): Uses bfloat16, Flash Attention 2, TF32, large batches
+- MPS (Apple): Uses float32, smaller batches
+- CPU: Fallback mode
+
 Usage:
     python 01_generate_responses.py --max-examples 100
     python 01_generate_responses.py --max-examples -1 --compile --batch-size 8
-    python 01_generate_responses.py --max-examples -1 --batch-size 32  # large VRAM
+    python 01_generate_responses.py --max-examples -1 --batch-size 32  # H100 with 80GB VRAM
 """
 from pathlib import Path
 from typing import Annotated
@@ -36,6 +41,22 @@ DATA_DIR = PROJECT_ROOT / "gmsk8_generation_platinum" / "dataset_preparation" / 
 MODEL_NAME = "Qwen/Qwen2.5-Math-1.5B"
 
 
+def get_default_batch_size(device: torch.device) -> int:
+    """Get recommended batch size for device."""
+    if device.type == "cuda":
+        # H100 80GB can handle large batches
+        mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+        if mem_gb >= 70:  # H100 80GB
+            return 16
+        elif mem_gb >= 40:  # A100 40GB
+            return 8
+        else:
+            return 4
+    elif device.type == "mps":
+        return 4
+    return 2  # CPU
+
+
 def process_batch(
     entries: list[dict],
     model,
@@ -53,7 +74,7 @@ def process_batch(
         truncation=True,
         max_length=1024,
         padding=True,
-    ).to(device, non_blocking=True)
+    ).to(device, non_blocking=(device.type == "cuda"))  # non_blocking only safe on CUDA
 
     prompt_lengths = (inputs.attention_mask.sum(dim=1)).tolist()
 
@@ -109,7 +130,7 @@ def main(
     num_responses: NumResponses = 10,
     max_new_tokens: MaxNewTokens = 512,
     compile: Compile = False,
-    batch_size: BatchSize = 4,
+    batch_size: BatchSize = 0,  # 0 = auto-detect based on device
     save_every: SaveEvery = 500,
     no_flash_attn: NoFlashAttn = False,
     zip_output: ZipOutput = False,
@@ -120,6 +141,12 @@ def main(
     out_path.mkdir(parents=True, exist_ok=True)
 
     device = get_device()
+
+    # Auto-detect batch size if not specified
+    if batch_size <= 0:
+        batch_size = get_default_batch_size(device)
+        log.info(f"Auto-detected batch size: {batch_size}")
+
     model, tokenizer = load_model_and_tokenizer(
         MODEL_NAME, device, use_compile=compile, use_flash_attn=not no_flash_attn
     )

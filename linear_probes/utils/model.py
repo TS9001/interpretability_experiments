@@ -1,4 +1,4 @@
-"""Model and device utilities."""
+"""Model and device utilities with CUDA/H100 optimizations."""
 import torch
 from transformers import AutoModelForCausalLM, AutoTokenizer
 
@@ -12,7 +12,7 @@ def get_model_short_name(model_name: str) -> str:
 
 
 def get_device() -> torch.device:
-    """Get the best available device."""
+    """Get the best available device with priority: CUDA > MPS > CPU."""
     if torch.cuda.is_available():
         return torch.device("cuda")
     elif torch.backends.mps.is_available():
@@ -20,10 +20,43 @@ def get_device() -> torch.device:
     return torch.device("cpu")
 
 
+def get_device_info() -> dict:
+    """Get detailed device information for logging."""
+    device = get_device()
+    info = {"device": str(device), "type": device.type}
+
+    if device.type == "cuda":
+        info["name"] = torch.cuda.get_device_name(0)
+        props = torch.cuda.get_device_properties(0)
+        info["memory_gb"] = props.total_memory / 1e9
+        info["compute_capability"] = f"{props.major}.{props.minor}"
+        info["is_h100"] = "H100" in info["name"]
+        info["is_ampere_plus"] = props.major >= 8  # Ampere = 8.x, Hopper = 9.x
+    elif device.type == "mps":
+        info["name"] = "Apple Silicon"
+
+    return info
+
+
+def log_device_info():
+    """Log device information."""
+    info = get_device_info()
+    if info["type"] == "cuda":
+        log.info(f"Device: {info['name']} ({info['memory_gb']:.0f}GB, compute {info['compute_capability']})")
+        if info.get("is_h100"):
+            log.info("H100 detected - using maximum optimizations")
+    elif info["type"] == "mps":
+        log.info("Device: Apple Silicon (MPS)")
+    else:
+        log.warning("Device: CPU (no GPU acceleration)")
+
+
 def setup_cuda_optimizations():
     """Enable CUDA optimizations for H100/Ampere+ GPUs."""
     if not torch.cuda.is_available():
         return
+
+    info = get_device_info()
 
     # Enable TF32 for matmul and cuDNN (free ~3x speedup on Ampere+)
     torch.backends.cuda.matmul.allow_tf32 = True
@@ -32,10 +65,15 @@ def setup_cuda_optimizations():
     # Enable cuDNN autotuner for best convolution algorithm
     torch.backends.cudnn.benchmark = True
 
-    # Log GPU info
-    gpu_name = torch.cuda.get_device_name(0)
-    gpu_mem = torch.cuda.get_device_properties(0).total_memory / 1e9
-    log.info(f"CUDA optimizations enabled for {gpu_name} ({gpu_mem:.0f}GB)")
+    # H100/Hopper-specific: enable FP8 support if available
+    if info.get("is_h100") or (torch.cuda.get_device_properties(0).major >= 9):
+        try:
+            # Hopper supports FP8 - enable transformer engine optimizations
+            torch.backends.cuda.matmul.allow_fp16_reduced_precision_reduction = True
+        except Exception:
+            pass
+
+    log.info(f"CUDA optimizations enabled: TF32={torch.backends.cuda.matmul.allow_tf32}, cuDNN benchmark=True")
 
 
 def clear_memory(device: torch.device):
@@ -53,8 +91,9 @@ def load_model_and_tokenizer(
     use_compile: bool = False,
     use_flash_attn: bool = True,
 ):
-    """Load model and tokenizer with H100 optimizations."""
-    log.info(f"Loading model {model_name} on {device}")
+    """Load model and tokenizer with automatic CUDA/H100 optimizations."""
+    log.info(f"Loading model {model_name}")
+    log_device_info()
 
     # Enable CUDA optimizations first
     if device.type == "cuda":
