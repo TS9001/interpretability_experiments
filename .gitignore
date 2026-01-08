@@ -210,3 +210,9 @@ __marimo__/
 gmsk8_generation/resources/
 logs
 .venv-pip
+*.outputs.*
+
+# Linear probes - generated data
+linear_probes/outputs/
+linear_probes/probe_data/
+linear_probes/responses/
