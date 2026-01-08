@@ -208,6 +208,8 @@ __marimo__/
 
 # GMSK8 Dataset - Resources
 gmsk8_generation/resources/
+gmsk8_generation_platinum/resources/
+gmsk8_generation_platinum/dataset_preparation/resources/
 logs
 .venv-pip
 *.outputs.*
