@@ -12,8 +12,9 @@ Resume = Annotated[bool, typer.Option("--resume", help="Resume from existing out
 # Generation-specific options
 NumResponses = Annotated[int, typer.Option("--num-responses", help="Responses per question")]
 MaxNewTokens = Annotated[int, typer.Option("--max-new-tokens", help="Max new tokens per response")]
-Compile = Annotated[bool, typer.Option("--compile", help="Use torch.compile (CUDA only)")]
-BatchSize = Annotated[int, typer.Option("--batch-size", help="Questions to process in parallel")]
+Compile = Annotated[bool, typer.Option("--compile", help="Use torch.compile with max-autotune (CUDA only, adds startup time)")]
+BatchSize = Annotated[int, typer.Option("--batch-size", help="Batch size (H100: 32-64 for 1.5B model, 16-32 for 7B)")]
+NoFlashAttn = Annotated[bool, typer.Option("--no-flash-attn", help="Disable Flash Attention 2 (enabled by default on CUDA)")]
 
 # Analysis/extraction options
 InputFile = Annotated[str, typer.Argument(help="Input JSONL file")]

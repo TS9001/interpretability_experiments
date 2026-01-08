@@ -124,6 +124,13 @@ fi
 log_info "Installing dependencies..."
 if [[ "$CUDA_AVAILABLE" == "true" ]]; then
     "$VENV_DIR/bin/pip" install -r "$SCRIPT_DIR/requirements_linux.txt"
+
+    # Install Flash Attention 2 for H100/Ampere+ (critical for performance)
+    log_info "Installing Flash Attention 2..."
+    "$VENV_DIR/bin/pip" install flash-attn --no-build-isolation 2>/dev/null || {
+        log_warn "Flash Attention 2 installation failed (may need ninja/CUDA toolkit)"
+        log_warn "Try: pip install ninja && pip install flash-attn --no-build-isolation"
+    }
 else
     # Install without CUDA
     grep -v "extra-index-url" "$SCRIPT_DIR/requirements_linux.txt" | \
@@ -140,6 +147,12 @@ print(f'PyTorch: {torch.__version__}')
 print(f'CUDA available: {torch.cuda.is_available()}')
 if torch.cuda.is_available():
     print(f'CUDA device: {torch.cuda.get_device_name(0)}')
+    # Check for Flash Attention 2
+    try:
+        import flash_attn
+        print(f'Flash Attention: {flash_attn.__version__}')
+    except ImportError:
+        print('Flash Attention: NOT INSTALLED (will use slower attention)')
 print(f'Transformers: {transformers.__version__}')
 print('All dependencies verified!')
 "
@@ -151,9 +164,16 @@ echo "To activate the environment:"
 echo "  cd $SCRIPT_DIR"
 echo "  source .venv/bin/activate"
 echo ""
-echo "To run probes:"
+echo "H100 optimized commands (use large batch sizes!):"
 echo "  cd linear_probes"
-echo "  python 04_extract_hidden_states.py --help"
+echo ""
+echo "  # Generate responses (batch-size 32-64 for 1.5B model on H100)"
+echo "  python 01_generate_responses.py --batch-size 32 --compile --max-examples -1"
+echo ""
+echo "  # Extract hidden states"
+echo "  python 04_extract_hidden_states.py --batch-size 32"
+echo ""
+echo "  # Train probes"
 echo "  python 05_train_probes.py --help"
 SETUP_EOF
 
@@ -191,4 +211,7 @@ echo "  ssh $REMOTE_HOST"
 echo "  cd $REMOTE_DIR"
 echo "  source .venv/bin/activate"
 echo "  cd linear_probes"
-echo "  python 04_extract_hidden_states.py --help"
+echo ""
+echo "H100 optimized commands:"
+echo "  python 01_generate_responses.py --batch-size 32 --compile --max-examples -1"
+echo "  python 04_extract_hidden_states.py --batch-size 32"

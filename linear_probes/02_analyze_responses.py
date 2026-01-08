@@ -21,7 +21,7 @@ import typer
 from transformers import AutoTokenizer
 
 from utils.args import InputFile, OutputDir
-from utils.data import load_json, load_jsonl, save_json, save_metadata
+from utils.data import load_json, load_jsonl, save_json, save_metadata, zip_files
 from utils.logging import log, print_header, print_config, print_summary, create_progress
 from utils.numbers import parse_number, extract_final_answer
 
@@ -472,6 +472,7 @@ def merge_responses_with_tokens(
 def main(
     input_file: InputFile,
     output_dir: OutputDir = None,
+    zip_output: bool = typer.Option(False, "--zip", help="Create zip archive for download"),
 ):
     """Analyze generated responses to extract operations and check correctness."""
     input_path = Path(input_file)
@@ -574,6 +575,12 @@ def main(
             'operations_found': total_found_ops,
         },
     )
+
+    # Create zip archive for download
+    if zip_output:
+        zip_path = output_path.parent / f"{output_path.stem}.zip"
+        zip_files([output_path], zip_path)
+        log.success(f"Zip archive: {zip_path}")
 
 
 if __name__ == '__main__':

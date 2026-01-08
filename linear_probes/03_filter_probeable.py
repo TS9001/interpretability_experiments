@@ -19,7 +19,7 @@ from collections import Counter
 
 import typer
 
-from utils.data import load_json, save_json
+from utils.data import load_json, save_json, zip_files
 from utils.logging import log, print_header, print_config, print_summary
 
 app = typer.Typer(add_completion=False)
@@ -139,6 +139,7 @@ def main(
     max_responses: int = typer.Option(1, "--max-responses", "-n", help="Max responses to keep per example"),
     require_correct: bool = typer.Option(False, "--require-correct", help="Only keep responses with correct final answer"),
     min_operations: int = typer.Option(1, "--min-ops", help="Minimum operations required"),
+    zip_output: bool = typer.Option(False, "--zip", help="Create zip archive for download"),
 ):
     """Filter to probeable responses and prepare for hidden state extraction."""
     input_path = input_file or DEFAULT_INPUT
@@ -269,6 +270,12 @@ def main(
     log.info(f"   B2, C1, D1, D2 (results): ~{stats['total_operations']} samples")
     log.info(f"   D6 (operators): ~{stats['total_operations']} samples")
     log.info(f"   A1, A2 (questions): ~{len(results)} samples")
+
+    # Create zip archive for download
+    if zip_output:
+        zip_path = output_path.parent / f"{output_path.stem}.zip"
+        zip_files([output_path], zip_path)
+        log.success(f"Zip archive: {zip_path}")
 
 
 if __name__ == '__main__':

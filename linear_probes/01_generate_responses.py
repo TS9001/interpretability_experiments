@@ -19,13 +19,14 @@ from tqdm import tqdm
 
 from utils.args import (
     MaxExamples, OutputDir, Split, Resume,
-    NumResponses, MaxNewTokens, Compile, BatchSize,
+    NumResponses, MaxNewTokens, Compile, BatchSize, NoFlashAttn,
 )
-from utils.data import load_jsonl, format_prompt, get_existing_indices, save_split, save_metadata
+from utils.data import load_jsonl, format_prompt, get_existing_indices, save_split, save_metadata, zip_directory
 from utils.logging import log, print_config, print_header, print_summary
 from utils.model import get_model_short_name, get_device, clear_memory, load_model_and_tokenizer
 
 SaveEvery = Annotated[int, typer.Option("--save-every", help="Save results every N examples (0 to disable)")]
+ZipOutput = Annotated[bool, typer.Option("--zip", help="Create zip archive of outputs for download")]
 
 
 SCRIPT_DIR = Path(__file__).parent
@@ -52,7 +53,7 @@ def process_batch(
         truncation=True,
         max_length=1024,
         padding=True,
-    ).to(device)
+    ).to(device, non_blocking=True)
 
     prompt_lengths = (inputs.attention_mask.sum(dim=1)).tolist()
 
@@ -110,6 +111,8 @@ def main(
     compile: Compile = False,
     batch_size: BatchSize = 4,
     save_every: SaveEvery = 500,
+    no_flash_attn: NoFlashAttn = False,
+    zip_output: ZipOutput = False,
 ):
     """Generate responses (no hidden states)."""
     model_short_name = get_model_short_name(MODEL_NAME)
@@ -117,7 +120,9 @@ def main(
     out_path.mkdir(parents=True, exist_ok=True)
 
     device = get_device()
-    model, tokenizer = load_model_and_tokenizer(MODEL_NAME, device, use_compile=compile)
+    model, tokenizer = load_model_and_tokenizer(
+        MODEL_NAME, device, use_compile=compile, use_flash_attn=not no_flash_attn
+    )
 
     splits = ['train', 'test'] if split == 'both' else [split]
     total_stats = {'processed': 0, 'skipped': 0, 'errors': 0}
@@ -221,6 +226,11 @@ def main(
         "Errors": total_stats['errors'],
         "Output": str(out_path),
     })
+
+    # Create zip archive for download
+    if zip_output:
+        zip_path = zip_directory(out_path, pattern="*.json")
+        log.success(f"Zip archive: {zip_path}")
 
 
 if __name__ == '__main__':

@@ -1,8 +1,11 @@
 """Data loading and saving utilities."""
 import json
+import zipfile
 from datetime import datetime
 from pathlib import Path
 from typing import Any, List, Dict, Optional, Tuple, Union
+
+from utils.logging import log
 
 
 def load_json(file_path: Path) -> Union[list, dict]:
@@ -173,3 +176,52 @@ def parse_csv_strings(s: str, default: Optional[List[str]] = None) -> List[str]:
     if not s:
         return default if default is not None else []
     return [x.strip() for x in s.split(',')]
+
+
+def zip_files(files: List[Path], zip_path: Path) -> Path:
+    """
+    Create a zip archive of the given files.
+
+    Args:
+        files: List of file paths to include
+        zip_path: Output zip file path
+
+    Returns:
+        Path to created zip file
+    """
+    zip_path = Path(zip_path)
+    zip_path.parent.mkdir(parents=True, exist_ok=True)
+
+    with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as zf:
+        for file in files:
+            file = Path(file)
+            if file.exists():
+                zf.write(file, file.name)
+
+    size_mb = zip_path.stat().st_size / (1024 * 1024)
+    log.info(f"Created zip: {zip_path.name} ({size_mb:.1f} MB)")
+    return zip_path
+
+
+def zip_directory(dir_path: Path, zip_path: Optional[Path] = None, pattern: str = "*.json") -> Path:
+    """
+    Create a zip archive of files in a directory.
+
+    Args:
+        dir_path: Directory to zip
+        zip_path: Output zip file path (default: dir_path.zip)
+        pattern: Glob pattern for files to include
+
+    Returns:
+        Path to created zip file
+    """
+    dir_path = Path(dir_path)
+    if zip_path is None:
+        zip_path = dir_path.parent / f"{dir_path.name}.zip"
+
+    files = list(dir_path.glob(pattern))
+    if not files:
+        log.warning(f"No files matching {pattern} in {dir_path}")
+        return zip_path
+
+    return zip_files(files, zip_path)

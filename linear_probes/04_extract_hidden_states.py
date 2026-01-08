@@ -213,8 +213,9 @@ def main(
     input_file: Optional[Path] = typer.Option(None, "--input", "-i", help="Input probeable JSON"),
     output_dir: Optional[Path] = typer.Option(None, "--output", "-o", help="Output directory"),
     layers: str = typer.Option(DEFAULT_LAYERS, "--layers", "-l", help="Layers to extract (comma-separated)"),
-    batch_size: int = typer.Option(4, "--batch-size", "-b", help="Batch size for extraction"),
+    batch_size: int = typer.Option(4, "--batch-size", "-b", help="Batch size (H100: 32-64 for 1.5B model)"),
     max_examples: int = typer.Option(-1, "--max-examples", "-n", help="Max examples to process (-1=all)"),
+    no_flash_attn: bool = typer.Option(False, "--no-flash-attn", help="Disable Flash Attention 2"),
 ):
     """Extract hidden states at probe positions."""
     input_path = input_file or DEFAULT_INPUT
@@ -240,7 +241,9 @@ def main(
     # Load model
     device = get_device()
     log.info(f"Loading model on {device}...")
-    model, tokenizer = load_model_and_tokenizer(MODEL_NAME, device)
+    model, tokenizer = load_model_and_tokenizer(
+        MODEL_NAME, device, use_flash_attn=not no_flash_attn
+    )
 
     # Load data
     log.info("Loading probeable data...")
