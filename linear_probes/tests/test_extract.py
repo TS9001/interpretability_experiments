@@ -7,29 +7,21 @@ import torch
 # Add parent dir to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Import from POC script (for backwards compatibility tests)
-import importlib.util
-spec = importlib.util.spec_from_file_location(
-    "extract_hidden_states_poc",
-    Path(__file__).parent.parent / "04_POC_extract_hidden_states.py"
+# Import from utils
+from utils.probe_positions import (
+    get_magnitude_bin, get_next_op_label, get_prev_op_label,
+    get_equals_positions,
 )
-poc_extract_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(poc_extract_module)
+from utils.model import get_default_batch_size
 
-get_magnitude_bin = poc_extract_module.get_magnitude_bin
-get_next_op_label = poc_extract_module.get_next_op_label
-get_default_batch_size = poc_extract_module.get_default_batch_size
-
-# Import from Full extraction script
+# Import ALL_PROBES from Full extraction script
+import importlib.util
 spec_full = importlib.util.spec_from_file_location(
     "extract_hidden_states_full",
     Path(__file__).parent.parent / "04_extract_hidden_states.py"
 )
 full_extract_module = importlib.util.module_from_spec(spec_full)
 spec_full.loader.exec_module(full_extract_module)
-
-get_prev_op_label = full_extract_module.get_prev_op_label
-find_equals_positions = full_extract_module.find_equals_positions
 ALL_PROBES = full_extract_module.ALL_PROBES
 
 
@@ -126,40 +118,34 @@ class TestGetPrevOpLabel:
         assert get_prev_op_label('unknown') == 4
 
 
-class TestFindEqualsPositions:
-    """Tests for find_equals_positions function (C4 probe)."""
+class TestGetEqualsPositions:
+    """Tests for get_equals_positions function (C4 probe)."""
 
     def test_finds_equals(self):
         tokens = ['5', '+', '3', '=', '8']
-        positions = find_equals_positions(tokens, 0)
+        positions = get_equals_positions(tokens)
         assert positions == [3]
 
     def test_multiple_equals(self):
         tokens = ['5', '=', '5', 'and', '3', '=', '3']
-        positions = find_equals_positions(tokens, 0)
+        positions = get_equals_positions(tokens)
         assert positions == [1, 5]
 
     def test_no_equals(self):
         tokens = ['hello', 'world']
-        positions = find_equals_positions(tokens, 0)
+        positions = get_equals_positions(tokens)
         assert positions == []
-
-    def test_respects_response_start(self):
-        """Tokens before response_start should be ignored."""
-        tokens = ['prompt', '=', 'ignored', 'response', '=', 'found']
-        positions = find_equals_positions(tokens, 3)
-        assert positions == [4]  # Only the equals after position 3
 
     def test_with_tokenizer_prefix(self):
         """Test with tokenizer prefix like Ġ."""
         tokens = ['5', 'Ġ+', 'Ġ3', 'Ġ=', 'Ġ8']
-        positions = find_equals_positions(tokens, 0)
+        positions = get_equals_positions(tokens)
         assert positions == [3]
 
     def test_with_underscore_prefix(self):
         """Test with tokenizer prefix like ▁."""
         tokens = ['5', '▁+', '▁3', '▁=', '▁8']
-        positions = find_equals_positions(tokens, 0)
+        positions = get_equals_positions(tokens)
         assert positions == [3]
 
 

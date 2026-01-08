@@ -26,11 +26,11 @@ import typer
 
 from utils.data import load_json, save_json, format_prompt, parse_csv_ints, parse_csv_strings
 from utils.logging import log, print_header, print_config, print_summary, create_progress
-from utils.model import get_device, clear_memory, load_model_and_tokenizer
+from utils.model import get_device, clear_memory, load_model_and_tokenizer, get_default_batch_size
 from utils.hidden_states import extract_hidden_batch
 from utils.probe_positions import (
     get_magnitude_bin, get_coarse_bin, get_difficulty_bin, get_step_position,
-    get_A1_labels, OPERATION_TYPES,
+    get_A1_labels, get_next_op_label, get_prev_op_label, OPERATION_TYPES,
 )
 
 app = typer.Typer(add_completion=False)
@@ -56,45 +56,6 @@ ALL_PROBES = [
 ]
 
 DEFAULT_PROBES = ','.join(ALL_PROBES)
-
-
-def get_default_batch_size(device: torch.device) -> int:
-    """Get recommended batch size for device."""
-    if device.type == "cuda":
-        mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
-        if mem_gb >= 70:  # H100 80GB
-            return 32
-        elif mem_gb >= 40:  # A100 40GB
-            return 16
-        else:
-            return 8
-    elif device.type == "mps":
-        return 4
-    return 2  # CPU
-
-
-def get_next_op_label(next_op: Optional[str]) -> int:
-    """Convert next operation to label."""
-    mapping = {'add': 0, 'sub': 1, 'mult': 2, 'div': 3, None: 4}
-    return mapping.get(next_op, 4)  # None = END
-
-
-def get_prev_op_label(prev_op: Optional[str]) -> int:
-    """Convert previous operation to label (D6)."""
-    mapping = {'add': 0, 'sub': 1, 'mult': 2, 'div': 3, None: 4}
-    return mapping.get(prev_op, 4)  # None = FIRST
-
-
-def find_equals_positions(tokens: list[str], response_start: int) -> list[int]:
-    """Find positions of '=' tokens in the response."""
-    positions = []
-    for i, tok in enumerate(tokens):
-        if i < response_start:
-            continue
-        clean = tok.replace('Ġ', '').replace('▁', '').strip()
-        if clean == '=':
-            positions.append(i)
-    return positions
 
 
 def collect_probe_samples(

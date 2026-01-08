@@ -16,12 +16,14 @@ from typing import Optional
 import numpy as np
 import torch
 import typer
-from sklearn.linear_model import LogisticRegression
-from sklearn.model_selection import train_test_split, cross_val_score
-from sklearn.metrics import classification_report, confusion_matrix
+from sklearn.metrics import confusion_matrix
 
 from utils.data import load_json, save_json
 from utils.logging import log, print_header, print_config, print_summary
+from utils.training import (
+    can_stratify, get_majority_baseline,
+    train_probe_single_layer, train_probe_cv,
+)
 
 app = typer.Typer(add_completion=False)
 
@@ -36,82 +38,6 @@ PROBE_INFO = {
     'D1': {'name': 'Intermediate/Final', 'n_classes': 2, 'random_baseline': 0.5},
     'D2': {'name': 'Next Operation', 'n_classes': 5, 'random_baseline': 0.2},
 }
-
-
-def can_stratify(y: np.ndarray) -> bool:
-    """Check if stratified split is possible (all classes have >= 2 samples)."""
-    _, counts = np.unique(y, return_counts=True)
-    return len(counts) > 1 and counts.min() >= 2
-
-
-def get_majority_baseline(y: np.ndarray) -> float:
-    """Calculate majority class baseline (accuracy if always predicting most common class)."""
-    _, counts = np.unique(y, return_counts=True)
-    return counts.max() / len(y)
-
-
-def train_probe_single_layer(
-    X: np.ndarray,
-    y: np.ndarray,
-    test_size: float = 0.2,
-    random_state: int = 42,
-) -> dict:
-    """Train a single probe and return metrics."""
-    # Split data - use stratify only if all classes have >= 2 samples
-    stratify = y if can_stratify(y) else None
-    X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state, stratify=stratify
-    )
-
-    # Train logistic regression
-    clf = LogisticRegression(
-        max_iter=1000,
-        solver='lbfgs',
-        random_state=random_state,
-    )
-
-    try:
-        clf.fit(X_train, y_train)
-        train_acc = clf.score(X_train, y_train)
-        test_acc = clf.score(X_test, y_test)
-        y_pred = clf.predict(X_test)
-
-        return {
-            'train_acc': train_acc,
-            'test_acc': test_acc,
-            'n_train': len(X_train),
-            'n_test': len(X_test),
-            'y_pred': y_pred,
-            'y_test': y_test,
-        }
-    except Exception as e:
-        log.warning(f"Training failed: {e}")
-        return None
-
-
-def train_probe_cv(
-    X: np.ndarray,
-    y: np.ndarray,
-    cv: int = 5,
-    random_state: int = 42,
-) -> dict:
-    """Train probe with cross-validation."""
-    clf = LogisticRegression(
-        max_iter=1000,
-        solver='lbfgs',
-        random_state=random_state,
-    )
-
-    try:
-        scores = cross_val_score(clf, X, y, cv=cv, scoring='accuracy')
-        return {
-            'mean_acc': scores.mean(),
-            'std_acc': scores.std(),
-            'cv_scores': scores.tolist(),
-        }
-    except Exception as e:
-        log.warning(f"CV training failed: {e}")
-        return None
 
 
 def print_results_table(results: dict, probe: str, layers: list[int], majority_baseline: float):

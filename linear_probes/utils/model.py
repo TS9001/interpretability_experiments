@@ -85,6 +85,21 @@ def clear_memory(device: torch.device):
         torch.cuda.synchronize()
 
 
+def get_default_batch_size(device: torch.device) -> int:
+    """Get recommended batch size based on device type and memory."""
+    if device.type == "cuda":
+        mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
+        if mem_gb >= 70:  # H100 80GB
+            return 32
+        elif mem_gb >= 40:  # A100 40GB
+            return 16
+        else:
+            return 8
+    elif device.type == "mps":
+        return 4
+    return 2  # CPU
+
+
 def load_model_and_tokenizer(
     model_name: str,
     device: torch.device,

@@ -23,8 +23,9 @@ import typer
 
 from utils.data import load_json, save_json, format_prompt, parse_csv_ints
 from utils.logging import log, print_header, print_config, print_summary, create_progress
-from utils.model import get_device, clear_memory, load_model_and_tokenizer
+from utils.model import get_device, clear_memory, load_model_and_tokenizer, get_default_batch_size
 from utils.hidden_states import extract_hidden_batch
+from utils.probe_positions import get_magnitude_bin, get_next_op_label
 
 app = typer.Typer(add_completion=False)
 
@@ -38,44 +39,6 @@ DEFAULT_LAYERS = "0,7,14,21,27"
 
 # POC Probes
 POC_PROBES = ['B1', 'B2', 'C1', 'D1', 'D2']
-
-
-def get_default_batch_size(device: torch.device) -> int:
-    """Get recommended batch size for device."""
-    if device.type == "cuda":
-        # H100 80GB can handle large batches for hidden state extraction
-        mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
-        if mem_gb >= 70:  # H100 80GB
-            return 32
-        elif mem_gb >= 40:  # A100 40GB
-            return 16
-        else:
-            return 8
-    elif device.type == "mps":
-        return 4
-    return 2  # CPU
-
-
-def get_magnitude_bin(value: float) -> int:
-    """Bin numerical values by magnitude."""
-    if value < 0:
-        return 0  # negative
-    elif value < 10:
-        return 1  # 0-10
-    elif value < 100:
-        return 2  # 10-100
-    elif value < 1000:
-        return 3  # 100-1K
-    elif value < 10000:
-        return 4  # 1K-10K
-    else:
-        return 5  # 10K+
-
-
-def get_next_op_label(next_op: Optional[str]) -> int:
-    """Convert next operation to label."""
-    mapping = {'add': 0, 'sub': 1, 'mult': 2, 'div': 3, None: 4}
-    return mapping.get(next_op, 4)  # None = END
 
 
 def collect_probe_samples(

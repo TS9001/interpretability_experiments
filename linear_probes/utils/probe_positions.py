@@ -60,6 +60,25 @@ OPERATION_TYPES = {
     'div': 3,
 }
 
+# Operation label mapping (includes None/END/FIRST as 4)
+OPERATION_LABEL_MAP = {
+    'add': 0,
+    'sub': 1,
+    'mult': 2,
+    'div': 3,
+    None: 4,  # END (for next_op) or FIRST (for prev_op)
+}
+
+
+def get_next_op_label(next_op: Optional[str]) -> int:
+    """Convert next operation to label (D2 probe). None = END."""
+    return OPERATION_LABEL_MAP.get(next_op, 4)
+
+
+def get_prev_op_label(prev_op: Optional[str]) -> int:
+    """Convert previous operation to label (D6 probe). None = FIRST."""
+    return OPERATION_LABEL_MAP.get(prev_op, 4)
+
 
 def get_last_position(positions: list[int]) -> int:
     """For multi-token spans, return last token position."""

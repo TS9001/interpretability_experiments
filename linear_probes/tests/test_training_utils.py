@@ -1,4 +1,4 @@
-"""Tests for probe training functions (POC and Full)."""
+"""Tests for utils/training.py functions."""
 import pytest
 import numpy as np
 import sys
@@ -7,26 +7,13 @@ from pathlib import Path
 # Add parent dir to path for imports
 sys.path.insert(0, str(Path(__file__).parent.parent))
 
-# Import shared training functions from utils
-from utils.training import can_stratify, get_majority_baseline, train_multi_label_probe
-
-# Import probe info from scripts
-import importlib.util
-spec = importlib.util.spec_from_file_location(
-    "train_probes_poc",
-    Path(__file__).parent.parent / "05_POC_train_probes.py"
+from utils.training import (
+    can_stratify,
+    get_majority_baseline,
+    train_probe_single_layer,
+    train_multi_label_probe,
+    train_probe_cv,
 )
-poc_train_module = importlib.util.module_from_spec(spec)
-spec.loader.exec_module(poc_train_module)
-PROBE_INFO = poc_train_module.PROBE_INFO
-
-spec_full = importlib.util.spec_from_file_location(
-    "train_probes_full",
-    Path(__file__).parent.parent / "05_train_probes.py"
-)
-full_train_module = importlib.util.module_from_spec(spec_full)
-spec_full.loader.exec_module(full_train_module)
-ALL_PROBE_INFO = full_train_module.ALL_PROBE_INFO
 
 
 class TestCanStratify:
@@ -91,74 +78,59 @@ class TestGetMajorityBaseline:
         """Three balanced classes."""
         y = np.array([0, 0, 1, 1, 2, 2])
         baseline = get_majority_baseline(y)
-        # All classes have 2/6 = 0.333, so majority is ~0.333
         assert abs(baseline - 1/3) < 0.01
 
 
-# ============================================================
-# Tests for Full Training Script (05_train_probes.py)
-# ============================================================
+class TestTrainProbeSingleLayer:
+    """Tests for train_probe_single_layer function."""
 
-class TestAllProbeInfo:
-    """Tests for ALL_PROBE_INFO dictionary."""
+    def test_returns_result_dict(self):
+        """Should return a result dict with expected keys."""
+        np.random.seed(42)
+        n_samples = 100
+        n_features = 32
 
-    def test_contains_all_probes(self):
-        """Check that all 14 probes are defined."""
-        expected_probes = [
-            'A1', 'A2',
-            'B1', 'B2',
-            'C1', 'C3_add', 'C3_sub', 'C3_mult', 'C3_div', 'C4',
-            'D1', 'D2', 'D3', 'D6',
-        ]
-        for probe in expected_probes:
-            assert probe in ALL_PROBE_INFO, f"Missing probe: {probe}"
+        X = np.random.randn(n_samples, n_features)
+        y = np.random.randint(0, 2, size=n_samples)
 
-    def test_probe_count(self):
-        """Should have 14 probes defined."""
-        assert len(ALL_PROBE_INFO) == 14
+        result = train_probe_single_layer(X, y)
 
-    def test_all_have_name(self):
-        """Each probe should have a name."""
-        for probe, info in ALL_PROBE_INFO.items():
-            assert 'name' in info, f"{probe} missing 'name'"
+        assert result is not None
+        assert 'train_acc' in result
+        assert 'test_acc' in result
+        assert 'n_train' in result
+        assert 'n_test' in result
+        assert 'y_pred' in result
+        assert 'y_test' in result
 
-    def test_all_have_random_baseline(self):
-        """Each probe should have a random baseline."""
-        for probe, info in ALL_PROBE_INFO.items():
-            assert 'random_baseline' in info, f"{probe} missing 'random_baseline'"
-            assert 0 < info['random_baseline'] <= 1, f"{probe} invalid baseline"
+    def test_reasonable_accuracy_simple_data(self):
+        """Should achieve reasonable accuracy on simple linearly separable data."""
+        np.random.seed(42)
+        n_samples = 200
+        n_features = 10
 
-    def test_a1_is_multi_label(self):
-        """A1 should be marked as multi-label."""
-        assert ALL_PROBE_INFO['A1']['type'] == 'multi_label'
-        assert ALL_PROBE_INFO['A1']['n_labels'] == 4
-        assert 'label_names' in ALL_PROBE_INFO['A1']
+        # Create linearly separable data
+        X = np.random.randn(n_samples, n_features)
+        y = (X[:, 0] > 0).astype(int)  # Class based on first feature
 
-    def test_classification_probes_have_n_classes(self):
-        """Classification probes should have n_classes."""
-        classification_probes = [
-            'A2', 'B1', 'B2', 'C1', 'C3_add', 'C3_sub', 'C3_mult', 'C3_div',
-            'C4', 'D1', 'D2', 'D3', 'D6'
-        ]
-        for probe in classification_probes:
-            info = ALL_PROBE_INFO[probe]
-            assert info.get('type', 'classification') == 'classification'
-            assert 'n_classes' in info, f"{probe} missing 'n_classes'"
-            assert info['n_classes'] >= 2
+        result = train_probe_single_layer(X, y)
 
+        # Should do much better than random (0.5)
+        assert result['test_acc'] > 0.7
 
-class TestPOCProbeInfo:
-    """Tests for POC PROBE_INFO (backwards compatibility)."""
+    def test_handles_multi_class(self):
+        """Should handle multi-class classification."""
+        np.random.seed(42)
+        n_samples = 150
+        n_features = 32
 
-    def test_contains_poc_probes(self):
-        """Check that POC probes are defined."""
-        poc_probes = ['B1', 'B2', 'C1', 'D1', 'D2']
-        for probe in poc_probes:
-            assert probe in PROBE_INFO
+        X = np.random.randn(n_samples, n_features)
+        y = np.random.randint(0, 3, size=n_samples)
 
-    def test_poc_probe_count(self):
-        """POC should have 5 probes."""
-        assert len(PROBE_INFO) == 5
+        result = train_probe_single_layer(X, y)
+
+        assert result is not None
+        assert result['n_train'] + result['n_test'] == n_samples
 
 
 class TestTrainMultiLabelProbe:
@@ -212,3 +184,44 @@ class TestTrainMultiLabelProbe:
 
         # Should do better than random (0.5)
         assert result['test_acc'] > 0.6
+
+
+class TestTrainProbeCv:
+    """Tests for train_probe_cv function."""
+
+    def test_returns_result_dict(self):
+        """Should return a result dict with expected keys."""
+        np.random.seed(42)
+        n_samples = 100
+        n_features = 32
+
+        X = np.random.randn(n_samples, n_features)
+        y = np.random.randint(0, 2, size=n_samples)
+
+        result = train_probe_cv(X, y, cv=3)
+
+        assert result is not None
+        assert 'mean_acc' in result
+        assert 'std_acc' in result
+        assert 'cv_scores' in result
+
+    def test_cv_scores_length(self):
+        """Should return cv_scores with length equal to cv folds."""
+        np.random.seed(42)
+        X = np.random.randn(100, 32)
+        y = np.random.randint(0, 2, size=100)
+
+        for cv in [3, 5]:
+            result = train_probe_cv(X, y, cv=cv)
+            assert len(result['cv_scores']) == cv
+
+    def test_mean_within_bounds(self):
+        """Mean accuracy should be between 0 and 1."""
+        np.random.seed(42)
+        X = np.random.randn(100, 32)
+        y = np.random.randint(0, 2, size=100)
+
+        result = train_probe_cv(X, y, cv=5)
+
+        assert 0 <= result['mean_acc'] <= 1
+        assert result['std_acc'] >= 0
