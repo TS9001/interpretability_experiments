@@ -49,7 +49,7 @@ def extract_hidden_at_positions(
         pos_hidden = layer_hidden[valid_positions, :]
         extracted.append(pos_hidden)
 
-    result = torch.stack(extracted, dim=0).cpu().half()
+    result = torch.stack(extracted, dim=0).cpu().float()
     return result, valid_positions
 
 
@@ -108,7 +108,7 @@ def extract_hidden_batch(
             pos_hidden = layer_hidden[valid_positions, :]
             extracted.append(pos_hidden)
 
-        result = torch.stack(extracted, dim=0).cpu().half()
+        result = torch.stack(extracted, dim=0).cpu().float()
         results.append((result, valid_positions))
 
     return results

@@ -245,6 +245,10 @@ def main(
         MODEL_NAME, device, use_flash_attn=not no_flash_attn
     )
 
+    # IMPORTANT: Use right padding for position-accurate hidden state extraction
+    # Left padding (used for generation) shifts token positions and breaks extraction
+    tokenizer.padding_side = 'right'
+
     # Load data
     log.info("Loading probeable data...")
     data = load_json(input_path)

@@ -38,6 +38,18 @@ PROBE_INFO = {
 }
 
 
+def can_stratify(y: np.ndarray) -> bool:
+    """Check if stratified split is possible (all classes have >= 2 samples)."""
+    _, counts = np.unique(y, return_counts=True)
+    return len(counts) > 1 and counts.min() >= 2
+
+
+def get_majority_baseline(y: np.ndarray) -> float:
+    """Calculate majority class baseline (accuracy if always predicting most common class)."""
+    _, counts = np.unique(y, return_counts=True)
+    return counts.max() / len(y)
+
+
 def train_probe_single_layer(
     X: np.ndarray,
     y: np.ndarray,
@@ -45,9 +57,10 @@ def train_probe_single_layer(
     random_state: int = 42,
 ) -> dict:
     """Train a single probe and return metrics."""
-    # Split data
+    # Split data - use stratify only if all classes have >= 2 samples
+    stratify = y if can_stratify(y) else None
     X_train, X_test, y_train, y_test = train_test_split(
-        X, y, test_size=test_size, random_state=random_state, stratify=y if len(np.unique(y)) > 1 else None
+        X, y, test_size=test_size, random_state=random_state, stratify=stratify
     )
 
     # Train logistic regression
@@ -101,16 +114,16 @@ def train_probe_cv(
         return None
 
 
-def print_results_table(results: dict, probe: str, layers: list[int]):
+def print_results_table(results: dict, probe: str, layers: list[int], majority_baseline: float):
     """Print formatted results table."""
     info = PROBE_INFO[probe]
-    baseline = info['random_baseline']
+    baseline = majority_baseline  # Use actual majority class baseline
 
     print(f"\n{'='*60}")
     print(f"Probe {probe}: {info['name']}")
-    print(f"Random baseline: {baseline:.1%}")
+    print(f"Majority baseline: {baseline:.1%}")
     print(f"{'='*60}")
-    print(f"{'Layer':>8} {'Test Acc':>10} {'Train Acc':>10} {'vs Random':>12}")
+    print(f"{'Layer':>8} {'Test Acc':>10} {'Train Acc':>10} {'vs Baseline':>12}")
     print(f"{'-'*8} {'-'*10} {'-'*10} {'-'*12}")
 
     for layer_idx, layer in enumerate(layers):
@@ -227,8 +240,11 @@ def main(
                         cm = confusion_matrix(result['y_test'], result['y_pred'])
                         print(f"  {cm}")
 
-        all_results[probe] = probe_results
-        print_results_table(probe_results, probe, layers)
+        # Calculate majority baseline for this probe
+        majority_baseline = get_majority_baseline(y)
+
+        all_results[probe] = {'results': probe_results, 'majority_baseline': majority_baseline}
+        print_results_table(probe_results, probe, layers, majority_baseline)
 
     # Summary
     print(f"\n{'='*60}")
@@ -236,23 +252,26 @@ def main(
     print(f"{'='*60}")
 
     summary_data = {}
-    for probe, results in all_results.items():
+    for probe, data in all_results.items():
+        results = data['results']
+        baseline = data['majority_baseline']
+
         if not results:
             continue
 
         best_layer_idx = max(results.keys(), key=lambda k: results[k]['test_acc'])
         best_acc = results[best_layer_idx]['test_acc']
-        baseline = PROBE_INFO[probe]['random_baseline']
 
         summary_data[probe] = {
             'best_layer': layers[best_layer_idx],
             'best_acc': best_acc,
             'vs_baseline': best_acc - baseline,
+            'majority_baseline': baseline,
         }
 
         status = "PASS" if best_acc > baseline + 0.1 else ("MARGINAL" if best_acc > baseline else "FAIL")
         print(f"{probe} ({PROBE_INFO[probe]['name']}):")
-        print(f"  Best: {best_acc:.1%} at layer {layers[best_layer_idx]} (baseline: {baseline:.1%}) [{status}]")
+        print(f"  Best: {best_acc:.1%} at layer {layers[best_layer_idx]} (majority: {baseline:.1%}, +{best_acc - baseline:.1%}) [{status}]")
 
     # Save results
     results_path = input_path / 'probe_results.json'
@@ -261,12 +280,13 @@ def main(
             probe: {
                 'results_by_layer': {
                     str(layers[k]): {'test_acc': v['test_acc'], 'train_acc': v['train_acc']}
-                    for k, v in results.items()
+                    for k, v in data['results'].items()
                 },
                 'best_layer': summary_data.get(probe, {}).get('best_layer'),
                 'best_acc': summary_data.get(probe, {}).get('best_acc'),
+                'majority_baseline': data['majority_baseline'],
             }
-            for probe, results in all_results.items()
+            for probe, data in all_results.items()
         },
         'layers': layers,
         'config': {'cv': cv, 'test_size': test_size},
@@ -280,13 +300,13 @@ def main(
     print(f"{'='*60}")
 
     success_count = 0
-    for probe, data in summary_data.items():
-        baseline = PROBE_INFO[probe]['random_baseline']
-        if data['best_acc'] > 0.6 and data['best_acc'] > baseline + 0.1:
-            print(f"  [PASS] {probe}: {data['best_acc']:.1%} > 60% and > baseline+10%")
+    for probe, probe_summary in summary_data.items():
+        baseline = probe_summary['majority_baseline']
+        if probe_summary['best_acc'] > baseline + 0.1:
+            print(f"  [PASS] {probe}: {probe_summary['best_acc']:.1%} > majority+10% ({baseline:.1%})")
             success_count += 1
         else:
-            print(f"  [    ] {probe}: {data['best_acc']:.1%}")
+            print(f"  [    ] {probe}: {probe_summary['best_acc']:.1%} (majority: {baseline:.1%})")
 
     if success_count >= 1:
         print(f"\nPOC VALIDATED: {success_count} probe(s) meet success criteria")

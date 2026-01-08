@@ -24,6 +24,7 @@ from utils.args import InputFile, OutputDir
 from utils.data import load_json, load_jsonl, save_json, save_metadata, zip_files
 from utils.logging import log, print_header, print_config, print_summary, create_progress
 from utils.numbers import parse_number, extract_final_answer
+from utils.tokenization import build_char_to_token_map
 
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
@@ -222,20 +223,22 @@ def find_operator_in_tokens(tokens: list[str], op_type: str, start_pos: int = 0)
 def find_token_positions_sequential(
     operations: list[dict],
     tokens: list[str],
+    text: str,
 ) -> list[dict]:
     """
     Find token positions for operations by searching left-to-right.
 
     For each operation, search for operand1, operator, operand2, result in order.
-    Each search starts from the position after the previous element was found.
-    For subsequent operations, continue from where the previous operation ended.
+    Uses char_start from each operation to find the starting token position,
+    avoiding false matches in echoed question text.
 
     If an element is not found, its position is set to -1.
     """
     if not operations or not tokens:
         return operations
 
-    current_pos = 0  # Track position across operations
+    # Build char-to-token map for accurate position conversion
+    char_to_token = build_char_to_token_map(tokens, text)
 
     for op in operations:
         operand1 = op.get('operand1')
@@ -243,12 +246,17 @@ def find_token_positions_sequential(
         operand2 = op.get('operand2')
         result = op.get('result')
 
-        # Search for operand1
-        op1_pos = find_number_in_tokens(tokens, operand1, current_pos) if operand1 is not None else -1
+        # Use char_start to find the starting token position for this operation
+        # This ensures we search in the actual operation, not in echoed question text
+        char_start = op.get('char_start', 0)
+        start_token = char_to_token.get(char_start, 0)
+
+        # Search for operand1 starting from the operation's character position
+        op1_pos = find_number_in_tokens(tokens, operand1, start_token) if operand1 is not None else -1
         op['operand1_positions'] = [op1_pos]
 
         # Search for operator (start from after operand1 if found)
-        search_start = op1_pos + 1 if op1_pos >= 0 else current_pos
+        search_start = op1_pos + 1 if op1_pos >= 0 else start_token
         operator_pos = find_operator_in_tokens(tokens, operator, search_start) if operator else -1
         op['operator_positions'] = [operator_pos]
 
@@ -257,21 +265,10 @@ def find_token_positions_sequential(
         op2_pos = find_number_in_tokens(tokens, operand2, search_start) if operand2 is not None else -1
         op['operand2_positions'] = [op2_pos]
 
-        # Search for result (start from after operand2 if found, but also look for = sign)
+        # Search for result (start from after operand2 if found)
         search_start = op2_pos + 1 if op2_pos >= 0 else search_start
         result_pos = find_number_in_tokens(tokens, result, search_start) if result is not None else -1
         op['result_positions'] = [result_pos]
-
-        # Update current_pos for next operation (continue from after result if found)
-        if result_pos >= 0:
-            current_pos = result_pos + 1
-        elif op2_pos >= 0:
-            current_pos = op2_pos + 1
-        elif operator_pos >= 0:
-            current_pos = operator_pos + 1
-        elif op1_pos >= 0:
-            current_pos = op1_pos + 1
-        # If nothing found, current_pos stays the same
 
     return operations
 
@@ -304,7 +301,8 @@ def analyze_response(
     operations = extract_operations(text)
 
     # Add token positions using sequential left-to-right search
-    operations = find_token_positions_sequential(operations, tokens)
+    # Pass text to use char_start for accurate position finding
+    operations = find_token_positions_sequential(operations, tokens, text)
 
     # Count correct/incorrect
     correct_ops = sum(1 for op in operations if op.get('is_correct', False))

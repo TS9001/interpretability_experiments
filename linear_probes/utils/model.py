@@ -86,7 +86,8 @@ def load_model_and_tokenizer(
             log.warning(f"Flash Attention 2 not available: {e}")
 
     model = AutoModelForCausalLM.from_pretrained(model_name, **model_kwargs)
-    model = model.to(device, non_blocking=True)
+    # Note: non_blocking=True causes NaN on MPS, so only use it for CUDA
+    model = model.to(device, non_blocking=(device.type == "cuda"))
     model.eval()
 
     # torch.compile with max-autotune for H100 (better than reduce-overhead)
