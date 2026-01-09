@@ -36,7 +36,13 @@ ZipOutput = Annotated[bool, typer.Option("--zip", help="Create zip archive of ou
 
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-DATA_DIR = PROJECT_ROOT / "gmsk8_generation_platinum" / "dataset_preparation" / "resources" / "gsm8k_split" / "matching"
+
+# Support PROBE_DATA_DIR env var for pipeline flexibility
+import os
+DATA_DIR = Path(os.environ.get(
+    'PROBE_DATA_DIR',
+    PROJECT_ROOT / "resources" / "gsm8k" / "matching"
+))
 
 MODEL_NAME = "Qwen/Qwen2.5-Math-1.5B"
 
@@ -167,10 +173,23 @@ def main(
     for split_name in splits:
         log.info(f"Processing {split_name}...")
 
+        # Try different file patterns (tokenized or plain)
+        data_file = None
+        for pattern in [f"{split_name}_tokenized.jsonl", f"{split_name}.jsonl"]:
+            candidate = DATA_DIR / pattern
+            if candidate.exists():
+                data_file = candidate
+                break
+
+        if not data_file:
+            log.warning(f"No data file found for {split_name} in {DATA_DIR}")
+            continue
+
         try:
-            dataset = load_jsonl(DATA_DIR / f"{split_name}_tokenized.jsonl")
-        except FileNotFoundError as e:
-            log.warning(f"{e}")
+            dataset = load_jsonl(data_file)
+            log.info(f"Loaded {len(dataset)} examples from {data_file.name}")
+        except Exception as e:
+            log.warning(f"Failed to load {data_file}: {e}")
             continue
 
         if max_examples > 0:

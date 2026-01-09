@@ -47,6 +47,26 @@ def is_response_probeable(resp: dict) -> bool:
     return all(is_operation_probeable(op) for op in ops)
 
 
+def filter_probeable_operations(resp: dict) -> tuple[dict, int, int]:
+    """
+    Filter response to keep only probeable operations.
+
+    Returns:
+        (filtered_response, kept_count, dropped_count)
+    """
+    ops = resp.get('operations', [])
+    if not ops:
+        return resp, 0, 0
+
+    kept_ops = [op for op in ops if is_operation_probeable(op)]
+    dropped = len(ops) - len(kept_ops)
+
+    filtered = resp.copy()
+    filtered['operations'] = kept_ops
+
+    return filtered, len(kept_ops), dropped
+
+
 def score_response(resp: dict, ground_truth_ops: list, ground_truth_result: Optional[float]) -> tuple:
     """
     Score a response for selection.
@@ -140,6 +160,7 @@ def main(
     require_correct: bool = typer.Option(False, "--require-correct", help="Only keep responses with correct final answer"),
     min_operations: int = typer.Option(1, "--min-ops", help="Minimum operations required"),
     zip_output: bool = typer.Option(False, "--zip", help="Create zip archive for download"),
+    per_operation: bool = typer.Option(False, "--per-operation", help="Filter per-operation instead of per-response (keeps partial responses)"),
 ):
     """Filter to probeable responses and prepare for hidden state extraction."""
     input_path = input_file or DEFAULT_INPUT
@@ -157,6 +178,7 @@ def main(
         'max_responses': max_responses,
         'require_correct': require_correct,
         'min_operations': min_operations,
+        'per_operation': per_operation,
     })
 
     log.info("Loading analyzed responses...")
@@ -177,22 +199,41 @@ def main(
         for resp_idx, resp in enumerate(example.get('responses', [])):
             stats['total_responses'] += 1
 
-            if not is_response_probeable(resp):
-                stats['not_probeable'] += 1
-                continue
+            if per_operation:
+                # Per-operation filtering: keep response but filter out non-probeable ops
+                filtered_resp, kept, dropped = filter_probeable_operations(resp)
+                stats['ops_kept'] += kept
+                stats['ops_dropped'] += dropped
 
-            ops = resp.get('operations', [])
-            if len(ops) < min_operations:
-                stats['too_few_ops'] += 1
-                continue
+                if kept < min_operations:
+                    stats['too_few_ops'] += 1
+                    continue
 
-            if require_correct and not resp.get('final_correct'):
-                stats['not_correct'] += 1
-                continue
+                if require_correct and not filtered_resp.get('final_correct'):
+                    stats['not_correct'] += 1
+                    continue
 
-            stats['probeable'] += 1
-            score = score_response(resp, ground_truth_ops, ground_truth_result)
-            probeable_responses.append((score, resp_idx, resp))
+                stats['probeable'] += 1
+                score = score_response(filtered_resp, ground_truth_ops, ground_truth_result)
+                probeable_responses.append((score, resp_idx, filtered_resp))
+            else:
+                # Original behavior: require ALL operations to be probeable
+                if not is_response_probeable(resp):
+                    stats['not_probeable'] += 1
+                    continue
+
+                ops = resp.get('operations', [])
+                if len(ops) < min_operations:
+                    stats['too_few_ops'] += 1
+                    continue
+
+                if require_correct and not resp.get('final_correct'):
+                    stats['not_correct'] += 1
+                    continue
+
+                stats['probeable'] += 1
+                score = score_response(resp, ground_truth_ops, ground_truth_result)
+                probeable_responses.append((score, resp_idx, resp))
 
         if not probeable_responses:
             stats['examples_no_probeable'] += 1
@@ -249,11 +290,10 @@ def main(
     log.success(f"Saved {len(results)} examples to {output_path}")
 
     # Summary
-    print_summary("Filter Summary", {
+    summary_stats = {
         'Input examples': stats['total_examples'],
         'Input responses': stats['total_responses'],
         'Probeable responses': stats['probeable'],
-        'Not probeable (missing positions)': stats['not_probeable'],
         'Too few operations': stats['too_few_ops'],
         'Not correct (filtered)': stats['not_correct'],
         'Examples with probeable': stats['examples_with_probeable'],
@@ -261,7 +301,18 @@ def main(
         'Output examples': len(results),
         'Output responses': stats['selected_responses'],
         'Total operations for probing': stats['total_operations'],
-    })
+    }
+
+    if per_operation:
+        summary_stats['Operations kept'] = stats['ops_kept']
+        summary_stats['Operations dropped'] = stats['ops_dropped']
+        if stats['ops_kept'] + stats['ops_dropped'] > 0:
+            pct = 100 * stats['ops_kept'] / (stats['ops_kept'] + stats['ops_dropped'])
+            summary_stats['Operation keep rate'] = f"{pct:.1f}%"
+    else:
+        summary_stats['Not probeable (missing positions)'] = stats['not_probeable']
+
+    print_summary("Filter Summary", summary_stats)
 
     # Estimate probe training data
     avg_ops = stats['total_operations'] / max(stats['selected_responses'], 1)

@@ -26,11 +26,16 @@ from utils.logging import log, print_header, print_config, print_summary, create
 from utils.numbers import parse_number, extract_final_answer
 from utils.tokenization import build_char_to_token_map
 
+import os
+
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
 
-# Path to original tokenized dataset (contains ground truth)
-DATA_DIR = PROJECT_ROOT / "gmsk8_generation_platinum" / "dataset_preparation" / "resources" / "gsm8k_split" / "matching"
+# Path to original dataset (contains ground truth) - supports env var override
+DATA_DIR = Path(os.environ.get(
+    'PROBE_DATA_DIR',
+    PROJECT_ROOT / "resources" / "gsm8k" / "matching"
+))
 
 # Default model name for tokenizer
 MODEL_NAME = "Qwen/Qwen2.5-Math-1.5B"
@@ -364,20 +369,25 @@ def analyze_example(example: dict, ground_truth: dict) -> dict:
 
 
 def load_ground_truth(split_name: str) -> dict:
-    """Load ground truth data from the original tokenized dataset."""
-    # Determine split name from input file name
-    tokenized_path = DATA_DIR / f"{split_name}_tokenized.jsonl"
+    """Load ground truth data from the original dataset (tokenized or plain)."""
+    # Try different file patterns
+    gt_path = None
+    for pattern in [f"{split_name}_tokenized.jsonl", f"{split_name}.jsonl"]:
+        candidate = DATA_DIR / pattern
+        if candidate.exists():
+            gt_path = candidate
+            break
 
-    if not tokenized_path.exists():
-        log.warning(f"Ground truth file not found: {tokenized_path}")
+    if not gt_path:
+        log.warning(f"Ground truth file not found for {split_name} in {DATA_DIR}")
         return {}
 
     ground_truth = {}
-    data = load_jsonl(tokenized_path)
+    data = load_jsonl(gt_path)
     for entry in data:
         ground_truth[entry['index']] = entry
 
-    log.info(f"Loaded ground truth for {len(ground_truth)} examples from {tokenized_path.name}")
+    log.info(f"Loaded ground truth for {len(ground_truth)} examples from {gt_path.name}")
     return ground_truth
 
 
