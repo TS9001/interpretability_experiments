@@ -218,3 +218,6 @@ logs
 linear_probes/outputs/
 linear_probes/probe_data/
 linear_probes/responses/
+
+# Local configs (SSH keys, credentials, etc.)
+configs/
