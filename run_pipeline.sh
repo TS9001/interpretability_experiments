@@ -497,7 +497,7 @@ if [ "$TRAIN_ONLY" = false ]; then
     subheader "Step 4.1: Generating responses on Platinum test"
     export PROBE_DATA_DIR="$SCRIPT_DIR/resources/gsm8k_platinum/matching"
     python 01_generate_responses.py $EVAL_ARGS --split test \
-        --output responses/Qwen2.5-Math-1.5B/platinum/
+        --output-dir responses/Qwen2.5-Math-1.5B/platinum/
 
     subheader "Step 4.2: Analyzing Platinum responses"
     python 02_analyze_responses.py responses/Qwen2.5-Math-1.5B/platinum/test_responses.json

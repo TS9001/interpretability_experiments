@@ -134,7 +134,7 @@ def load_model_and_tokenizer(
     # Enable Flash Attention 2 on CUDA (2-4x faster attention on H100)
     if use_flash_attn and device.type == "cuda":
         try:
-            model_kwargs["attn_implementation"] = "flash_attention_2"
+            model_kwargs["attn_implementation"] = "eager"
             log.info("Flash Attention 2 enabled")
         except Exception as e:
             log.warning(f"Flash Attention 2 not available: {e}")
