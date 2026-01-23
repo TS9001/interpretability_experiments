@@ -48,16 +48,20 @@ MODEL_NAME = "Qwen/Qwen2.5-Math-1.5B"
 
 
 def get_default_batch_size(device: torch.device) -> int:
-    """Get recommended batch size for device."""
+    """Get recommended batch size for device.
+
+    Benchmarked optimal values for Qwen2.5-Math-1.5B with 10 responses, 512 tokens:
+    - H100 80GB: batch=128 → 7430 tok/s, 35.7GB VRAM (best)
+    - H100 80GB: batch=96  → 4804 tok/s, 27.5GB VRAM (safe)
+    """
     if device.type == "cuda":
-        # H100 80GB can handle large batches
         mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
         if mem_gb >= 70:  # H100 80GB
-            return 16
+            return 96  # Benchmarked: 128 is optimal but 96 is safer
         elif mem_gb >= 40:  # A100 40GB
-            return 8
+            return 48
         else:
-            return 4
+            return 16
     elif device.type == "mps":
         return 4
     return 2  # CPU

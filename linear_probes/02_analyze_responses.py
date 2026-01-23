@@ -151,6 +151,9 @@ def normalize_token(token: str) -> str:
 
 def format_number_for_search(num: float) -> str:
     """Format number as string for token search."""
+    import math
+    if math.isinf(num) or math.isnan(num):
+        return str(num)  # "inf", "-inf", or "nan"
     if num == int(num):
         return str(int(num))
     return str(num)
