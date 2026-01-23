@@ -13,6 +13,7 @@ Usage:
 from pathlib import Path
 from typing import Optional
 
+import joblib
 import numpy as np
 import torch
 import typer
@@ -75,6 +76,151 @@ def check_class_balance(y: np.ndarray, probe: str):
         print(f"    Class {cls}: {count} ({pct:.1f}%)")
 
 
+def evaluate_saved_probes(
+    probes_dir: Path,
+    eval_data_dir: Path,
+    probes_filter: Optional[str],
+    verbose: bool,
+):
+    """Evaluate pre-trained probes on new data."""
+    print_header("POC Probe Evaluation", "Eval-Only Mode")
+
+    # Load metadata from eval data
+    meta_path = eval_data_dir / 'metadata.json'
+    if meta_path.exists():
+        metadata = load_json(meta_path)
+        available_probes = metadata.get('probes', list(PROBE_INFO.keys()))
+        layers = metadata.get('layers', [0, 7, 14, 21, 27])
+    else:
+        available_probes = list(PROBE_INFO.keys())
+        layers = [0, 7, 14, 21, 27]
+
+    # Parse probe filter
+    if probes_filter:
+        probe_list = [p.strip() for p in probes_filter.split(',')]
+    else:
+        probe_list = available_probes
+
+    trained_probes_dir = probes_dir / 'trained_probes'
+    if not trained_probes_dir.exists():
+        log.error(f"No trained probes found at {trained_probes_dir}")
+        log.error("Run without --eval-only first to train probes")
+        raise typer.Exit(1)
+
+    print_config("Configuration", {
+        'trained_probes': str(trained_probes_dir),
+        'eval_data': str(eval_data_dir),
+        'probes': ', '.join(probe_list),
+    })
+
+    all_results = {}
+
+    for probe in probe_list:
+        # Load trained probes
+        probe_path = trained_probes_dir / f"{probe}_probes.joblib"
+        if not probe_path.exists():
+            log.warning(f"Trained probe not found: {probe_path}")
+            continue
+
+        # Load eval data
+        eval_file = eval_data_dir / f"{probe}_samples.pt"
+        if not eval_file.exists():
+            log.warning(f"Eval data not found: {eval_file}")
+            continue
+
+        log.info(f"Evaluating {probe}...")
+
+        saved = joblib.load(probe_path)
+        trained_models = saved['models']
+        trained_layers = saved['layers']
+
+        data = torch.load(eval_file, weights_only=False)
+        X = data['X'].numpy()
+        y = data['y'].numpy()
+        n_samples, n_layers, hidden_dim = X.shape
+
+        log.info(f"  Eval samples: {n_samples}")
+
+        if verbose:
+            check_class_balance(y, probe)
+
+        # Evaluate each layer
+        probe_results = {}
+        for layer_idx, model in trained_models.items():
+            if layer_idx >= n_layers:
+                continue
+
+            X_layer = X[:, layer_idx, :]
+            try:
+                test_acc = model.score(X_layer, y)
+                y_pred = model.predict(X_layer)
+                probe_results[layer_idx] = {
+                    'test_acc': test_acc,
+                    'train_acc': test_acc,  # N/A for eval
+                    'y_pred': y_pred,
+                    'y_test': y,
+                }
+
+                if verbose and layer_idx == max(trained_models.keys()):
+                    print(f"\n  Confusion matrix (layer {layers[layer_idx]}):")
+                    cm = confusion_matrix(y, y_pred)
+                    print(f"  {cm}")
+            except Exception as e:
+                log.warning(f"  Layer {layer_idx} eval failed: {e}")
+
+        majority_baseline = get_majority_baseline(y)
+        all_results[probe] = {'results': probe_results, 'majority_baseline': majority_baseline}
+        print_results_table(probe_results, probe, layers, majority_baseline)
+
+    # Summary
+    print(f"\n{'='*60}")
+    print("EVALUATION SUMMARY")
+    print(f"{'='*60}")
+
+    summary_data = {}
+    for probe, data in all_results.items():
+        results = data['results']
+        baseline = data['majority_baseline']
+
+        if not results:
+            continue
+
+        best_layer_idx = max(results.keys(), key=lambda k: results[k]['test_acc'])
+        best_acc = results[best_layer_idx]['test_acc']
+
+        summary_data[probe] = {
+            'best_layer': layers[best_layer_idx],
+            'best_acc': best_acc,
+            'vs_baseline': best_acc - baseline,
+            'majority_baseline': baseline,
+        }
+
+        status = "PASS" if best_acc > baseline + 0.1 else ("MARGINAL" if best_acc > baseline else "FAIL")
+        print(f"{probe} ({PROBE_INFO[probe]['name']}):")
+        print(f"  Best: {best_acc:.1%} at layer {layers[best_layer_idx]} (majority: {baseline:.1%}, +{best_acc - baseline:.1%}) [{status}]")
+
+    # Save eval results
+    results_path = eval_data_dir / 'eval_results.json'
+    save_json({
+        'probes': {
+            probe: {
+                'results_by_layer': {
+                    str(layers[k]): {'test_acc': v['test_acc']}
+                    for k, v in data['results'].items()
+                },
+                'best_layer': summary_data.get(probe, {}).get('best_layer'),
+                'best_acc': summary_data.get(probe, {}).get('best_acc'),
+                'majority_baseline': data['majority_baseline'],
+            }
+            for probe, data in all_results.items()
+        },
+        'layers': layers,
+        'mode': 'eval_only',
+    }, results_path)
+
+    log.success(f"Eval results saved to {results_path}")
+
+
 @app.command()
 def main(
     input_dir: Optional[Path] = typer.Option(None, "--input", "-i", help="Input probe data directory"),
@@ -82,6 +228,9 @@ def main(
     cv: int = typer.Option(0, "--cv", help="Cross-validation folds (0=train/test split)"),
     test_size: float = typer.Option(0.2, "--test-size", help="Test set fraction"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed metrics"),
+    eval_only: bool = typer.Option(False, "--eval-only", help="Evaluate pre-trained probes only"),
+    eval_data: Optional[Path] = typer.Option(None, "--eval-data", help="Evaluation data directory (for --eval-only)"),
+    save_probes: bool = typer.Option(True, "--save-probes/--no-save-probes", help="Save trained probes"),
 ):
     """Train linear probes and evaluate accuracy."""
     input_path = input_dir or DEFAULT_INPUT
@@ -89,6 +238,16 @@ def main(
     if not input_path.exists():
         log.error(f"Input not found: {input_path}")
         raise typer.Exit(1)
+
+    # Handle eval-only mode
+    if eval_only:
+        if not eval_data:
+            log.error("--eval-data required with --eval-only")
+            raise typer.Exit(1)
+        if not eval_data.exists():
+            log.error(f"Eval data not found: {eval_data}")
+            raise typer.Exit(1)
+        return evaluate_saved_probes(input_path, eval_data, probes, verbose)
 
     # Load metadata
     meta_path = input_path / 'metadata.json'
@@ -143,6 +302,7 @@ def main(
 
         # Train probes for each layer
         probe_results = {}
+        trained_models = {}
 
         for layer_idx in range(n_layers):
             X_layer = X[:, layer_idx, :]  # (n_samples, hidden_dim)
@@ -159,12 +319,22 @@ def main(
                 result = train_probe_single_layer(X_layer, y, test_size=test_size)
                 if result:
                     probe_results[layer_idx] = result
+                    if 'model' in result:
+                        trained_models[layer_idx] = result['model']
 
                     if verbose and layer_idx == n_layers - 1:
                         # Print confusion matrix for last layer
                         print(f"\n  Confusion matrix (layer {layers[layer_idx]}):")
                         cm = confusion_matrix(result['y_test'], result['y_pred'])
                         print(f"  {cm}")
+
+        # Save trained probes
+        if save_probes and trained_models:
+            probes_dir = input_path / 'trained_probes'
+            probes_dir.mkdir(exist_ok=True)
+            probe_path = probes_dir / f"{probe}_probes.joblib"
+            joblib.dump({'models': trained_models, 'layers': layers}, probe_path)
+            log.info(f"  Saved {len(trained_models)} probe models to {probe_path}")
 
         # Calculate majority baseline for this probe
         majority_baseline = get_majority_baseline(y)

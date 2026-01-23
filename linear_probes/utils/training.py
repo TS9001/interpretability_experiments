@@ -54,6 +54,7 @@ def train_probe_single_layer(
             'n_test': len(X_test),
             'y_pred': y_pred,
             'y_test': y_test,
+            'model': clf,
         }
     except Exception as e:
         log.warning(f"Training failed: {e}")
