@@ -468,10 +468,18 @@ if [ "$EVAL_ONLY" = false ]; then
     if [ "$BATCH_SIZE" != "0" ]; then
         EXTRACT_ARGS="$EXTRACT_ARGS --batch-size $BATCH_SIZE"
     fi
-    python 04_POC_extract_hidden_states.py $EXTRACT_ARGS
+    if [ "$POC_MODE" = true ]; then
+        python 04_POC_extract_hidden_states.py $EXTRACT_ARGS
+    else
+        python 04_extract_hidden_states.py $EXTRACT_ARGS
+    fi
 
     subheader "Step 3.2: Training linear probes"
-    python 05_POC_train_probes.py --verbose
+    if [ "$POC_MODE" = true ]; then
+        python 05_POC_train_probes.py --verbose
+    else
+        python 05_train_probes.py --verbose
+    fi
 
     cd "$SCRIPT_DIR"
     success "Probe training complete"
@@ -510,16 +518,30 @@ if [ "$TRAIN_ONLY" = false ]; then
     python 03_filter_probeable.py $FILTER_ARGS
 
     subheader "Step 4.4: Extracting hidden states from Platinum"
-    python 04_POC_extract_hidden_states.py \
-        --input responses/Qwen2.5-Math-1.5B/platinum/test_responses_analyzed_probeable.json \
-        --output probe_data/platinum/ \
-        ${BATCH_SIZE:+--batch-size $BATCH_SIZE}
+    if [ "$POC_MODE" = true ]; then
+        python 04_POC_extract_hidden_states.py \
+            --input responses/Qwen2.5-Math-1.5B/platinum/test_responses_analyzed_probeable.json \
+            --output probe_data/platinum/ \
+            ${BATCH_SIZE:+--batch-size $BATCH_SIZE}
+    else
+        python 04_extract_hidden_states.py \
+            --input responses/Qwen2.5-Math-1.5B/platinum/test_responses_analyzed_probeable.json \
+            --output probe_data/platinum/ \
+            ${BATCH_SIZE:+--batch-size $BATCH_SIZE}
+    fi
 
     subheader "Step 4.5: Evaluating probes on Platinum"
-    python 05_POC_train_probes.py \
-        --eval-only \
-        --eval-data probe_data/platinum/ \
-        --verbose
+    if [ "$POC_MODE" = true ]; then
+        python 05_POC_train_probes.py \
+            --eval-only \
+            --eval-data probe_data/platinum/ \
+            --verbose
+    else
+        python 05_train_probes.py \
+            --eval-only \
+            --eval-data probe_data/platinum/ \
+            --verbose
+    fi
 
     cd "$SCRIPT_DIR"
     success "Evaluation complete"
