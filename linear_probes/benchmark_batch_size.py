@@ -19,7 +19,7 @@ app = typer.Typer(add_completion=False)
 
 SCRIPT_DIR = Path(__file__).parent
 PROJECT_ROOT = SCRIPT_DIR.parent
-DATA_DIR = PROJECT_ROOT / "resources" / "gsm8k" / "matching"
+DATA_DIR = PROJECT_ROOT / "gmsk8_generation_platinum" / "dataset_preparation" / "resources" / "gsm8k_split" / "matching"
 MODEL_NAME = "Qwen/Qwen2.5-Math-1.5B"
 
 

@@ -34,7 +34,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 # Path to original dataset (contains ground truth) - supports env var override
 DATA_DIR = Path(os.environ.get(
     'PROBE_DATA_DIR',
-    PROJECT_ROOT / "resources" / "gsm8k" / "matching"
+    PROJECT_ROOT / "gmsk8_generation_platinum" / "dataset_preparation" / "resources" / "gsm8k_split" / "matching"
 ))
 
 # Default model name for tokenizer

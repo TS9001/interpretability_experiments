@@ -41,7 +41,7 @@ PROJECT_ROOT = SCRIPT_DIR.parent
 import os
 DATA_DIR = Path(os.environ.get(
     'PROBE_DATA_DIR',
-    PROJECT_ROOT / "resources" / "gsm8k" / "matching"
+    PROJECT_ROOT / "gmsk8_generation_platinum" / "dataset_preparation" / "resources" / "gsm8k_split" / "matching"
 ))
 
 MODEL_NAME = "Qwen/Qwen2.5-Math-1.5B"
