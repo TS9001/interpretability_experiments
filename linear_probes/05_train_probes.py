@@ -1,32 +1,31 @@
 #!/usr/bin/env python3
 """
-Full Probe Training: Train linear probes for all probe types.
+MLP Probe Training: Train small neural network probes for all probe types.
 
-Trains sklearn LogisticRegression probes on extracted hidden states
-and reports accuracy per layer. Supports:
+Trains PyTorch MLP probes on extracted hidden states and reports accuracy per layer.
+Uses GPU if available for fast training. Supports:
 - Classification probes (most probes)
 - Multi-label probes (A1)
 
 Usage:
     python 05_train_probes.py
     python 05_train_probes.py --probes B1,C1,D1
-    python 05_train_probes.py --cv 5
+    python 05_train_probes.py --hidden-dim 256 --epochs 50
 """
 from pathlib import Path
 from typing import Optional
 
-import joblib
 import numpy as np
 import torch
+import torch.nn as nn
+import torch.optim as optim
+from torch.utils.data import DataLoader, TensorDataset
 import typer
-from sklearn.metrics import confusion_matrix
+from sklearn.model_selection import train_test_split
+from sklearn.metrics import confusion_matrix, f1_score
 
 from utils.data import load_json, save_json
 from utils.logging import log, print_header, print_config, print_summary
-from utils.training import (
-    can_stratify, get_majority_baseline,
-    train_probe_single_layer, train_multi_label_probe, train_probe_cv,
-)
 
 app = typer.Typer(add_completion=False)
 
@@ -41,7 +40,7 @@ ALL_PROBE_INFO = {
         'type': 'multi_label',
         'n_labels': 4,
         'label_names': ['add', 'sub', 'mult', 'div'],
-        'random_baseline': 0.5,  # Per-label binary
+        'random_baseline': 0.5,
     },
     'A2': {
         'name': 'Difficulty',
@@ -127,6 +126,203 @@ ALL_PROBE_INFO = {
 }
 
 
+class MLPProbe(nn.Module):
+    """Single hidden layer MLP for probing hidden states."""
+
+    def __init__(self, input_dim: int, output_dim: int, hidden_dim: int = 256, dropout: float = 0.1):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, output_dim),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+class MLPProbeMultiLabel(nn.Module):
+    """Single hidden layer MLP for multi-label classification."""
+
+    def __init__(self, input_dim: int, n_labels: int, hidden_dim: int = 256, dropout: float = 0.1):
+        super().__init__()
+        self.net = nn.Sequential(
+            nn.Linear(input_dim, hidden_dim),
+            nn.ReLU(),
+            nn.Dropout(dropout),
+            nn.Linear(hidden_dim, n_labels),
+            nn.Sigmoid(),
+        )
+
+    def forward(self, x):
+        return self.net(x)
+
+
+def get_device():
+    """Get best available device."""
+    if torch.cuda.is_available():
+        return torch.device('cuda')
+    elif hasattr(torch.backends, 'mps') and torch.backends.mps.is_available():
+        return torch.device('mps')
+    return torch.device('cpu')
+
+
+def train_mlp_probe(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    n_classes: int,
+    hidden_dim: int = 256,
+    epochs: int = 30,
+    batch_size: int = 256,
+    lr: float = 1e-3,
+    device: torch.device = None,
+) -> dict:
+    """Train an MLP probe for classification."""
+    if device is None:
+        device = get_device()
+
+    input_dim = X_train.shape[1]
+
+    # Convert to tensors
+    X_train_t = torch.tensor(X_train, dtype=torch.float32)
+    y_train_t = torch.tensor(y_train, dtype=torch.long)
+    X_test_t = torch.tensor(X_test, dtype=torch.float32)
+    y_test_t = torch.tensor(y_test, dtype=torch.long)
+
+    # Create data loaders
+    train_dataset = TensorDataset(X_train_t, y_train_t)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+    # Initialize model
+    model = MLPProbe(input_dim, n_classes, hidden_dim).to(device)
+    criterion = nn.CrossEntropyLoss()
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+
+    # Training loop
+    model.train()
+    for epoch in range(epochs):
+        for batch_X, batch_y in train_loader:
+            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(batch_X)
+            loss = criterion(outputs, batch_y)
+            loss.backward()
+            optimizer.step()
+
+        scheduler.step()
+
+    # Evaluate
+    model.eval()
+    with torch.no_grad():
+        # Train accuracy
+        train_outputs = model(X_train_t.to(device))
+        train_preds = train_outputs.argmax(dim=1).cpu().numpy()
+        train_acc = (train_preds == y_train).mean()
+
+        # Test accuracy
+        test_outputs = model(X_test_t.to(device))
+        test_preds = test_outputs.argmax(dim=1).cpu().numpy()
+        test_acc = (test_preds == y_test).mean()
+
+    return {
+        'model': model,
+        'train_acc': float(train_acc),
+        'test_acc': float(test_acc),
+        'y_pred': test_preds,
+        'y_test': y_test,
+    }
+
+
+def train_mlp_probe_multi_label(
+    X_train: np.ndarray,
+    y_train: np.ndarray,
+    X_test: np.ndarray,
+    y_test: np.ndarray,
+    n_labels: int,
+    hidden_dim: int = 256,
+    epochs: int = 30,
+    batch_size: int = 256,
+    lr: float = 1e-3,
+    device: torch.device = None,
+) -> dict:
+    """Train an MLP probe for multi-label classification."""
+    if device is None:
+        device = get_device()
+
+    input_dim = X_train.shape[1]
+
+    # Convert to tensors
+    X_train_t = torch.tensor(X_train, dtype=torch.float32)
+    y_train_t = torch.tensor(y_train, dtype=torch.float32)
+    X_test_t = torch.tensor(X_test, dtype=torch.float32)
+    y_test_t = torch.tensor(y_test, dtype=torch.float32)
+
+    # Create data loaders
+    train_dataset = TensorDataset(X_train_t, y_train_t)
+    train_loader = DataLoader(train_dataset, batch_size=batch_size, shuffle=True)
+
+    # Initialize model
+    model = MLPProbeMultiLabel(input_dim, n_labels, hidden_dim).to(device)
+    criterion = nn.BCELoss()
+    optimizer = optim.AdamW(model.parameters(), lr=lr, weight_decay=0.01)
+    scheduler = optim.lr_scheduler.CosineAnnealingLR(optimizer, T_max=epochs)
+
+    # Training loop
+    model.train()
+    for epoch in range(epochs):
+        for batch_X, batch_y in train_loader:
+            batch_X, batch_y = batch_X.to(device), batch_y.to(device)
+
+            optimizer.zero_grad()
+            outputs = model(batch_X)
+            loss = criterion(outputs, batch_y)
+            loss.backward()
+            optimizer.step()
+
+        scheduler.step()
+
+    # Evaluate
+    model.eval()
+    with torch.no_grad():
+        # Test predictions
+        test_outputs = model(X_test_t.to(device))
+        test_preds = (test_outputs > 0.5).cpu().numpy().astype(int)
+
+        # Per-label accuracy and F1
+        label_results = []
+        for i in range(n_labels):
+            label_acc = (test_preds[:, i] == y_test[:, i]).mean()
+            label_f1 = f1_score(y_test[:, i], test_preds[:, i], zero_division=0)
+            label_results.append({
+                'test_acc': float(label_acc),
+                'f1': float(label_f1),
+            })
+
+        # Overall accuracy (exact match)
+        test_acc = (test_preds == y_test).all(axis=1).mean()
+        mean_f1 = np.mean([r['f1'] for r in label_results])
+
+    return {
+        'model': model,
+        'test_acc': float(test_acc),
+        'mean_f1': float(mean_f1),
+        'label_results': label_results,
+        'y_pred': test_preds,
+        'y_test': y_test,
+    }
+
+
+def get_majority_baseline(y: np.ndarray) -> float:
+    """Calculate majority class baseline accuracy."""
+    unique, counts = np.unique(y, return_counts=True)
+    return counts.max() / len(y)
+
+
 def print_results_table(results: dict, probe: str, layers: list[int], majority_baseline: float, is_multi_label: bool = False):
     """Print formatted results table."""
     info = ALL_PROBE_INFO.get(probe, {'name': probe, 'random_baseline': 0.5})
@@ -199,186 +395,32 @@ def check_class_balance(y: np.ndarray, probe: str, is_multi_label: bool = False)
             print(f"    Class {cls}: {count} ({pct:.1f}%)")
 
 
-def evaluate_saved_probes(
-    probes_dir: Path,
-    eval_data_dir: Path,
-    probes_filter: Optional[str],
-    verbose: bool,
-):
-    """Evaluate pre-trained probes on new data."""
-    print_header("Probe Evaluation", "Eval-Only Mode")
-
-    # Load metadata from eval data
-    meta_path = eval_data_dir / 'metadata.json'
-    if meta_path.exists():
-        metadata = load_json(meta_path)
-        available_probes = metadata.get('probes', list(ALL_PROBE_INFO.keys()))
-        layers = metadata.get('layers', [0, 7, 14, 21, 27])
-    else:
-        available_probes = list(ALL_PROBE_INFO.keys())
-        layers = [0, 7, 14, 21, 27]
-
-    # Parse probe filter
-    if probes_filter:
-        probe_list = [p.strip() for p in probes_filter.split(',')]
-    else:
-        probe_list = available_probes
-
-    trained_probes_dir = probes_dir / 'trained_probes'
-    if not trained_probes_dir.exists():
-        log.error(f"No trained probes found at {trained_probes_dir}")
-        log.error("Run without --eval-only first to train probes")
-        raise typer.Exit(1)
-
-    print_config("Configuration", {
-        'trained_probes': str(trained_probes_dir),
-        'eval_data': str(eval_data_dir),
-        'probes': ', '.join(probe_list),
-    })
-
-    all_results = {}
-
-    for probe in probe_list:
-        # Load trained probes
-        probe_path = trained_probes_dir / f"{probe}_probes.joblib"
-        if not probe_path.exists():
-            log.warning(f"Trained probe not found: {probe_path}")
-            continue
-
-        # Load eval data
-        eval_file = eval_data_dir / f"{probe}_samples.pt"
-        if not eval_file.exists():
-            log.warning(f"Eval data not found: {eval_file}")
-            continue
-
-        log.info(f"Evaluating {probe}...")
-
-        saved = joblib.load(probe_path)
-        trained_models = saved['models']
-        trained_layers = saved['layers']
-
-        data = torch.load(eval_file, weights_only=False)
-        X = data['X'].numpy()
-        y = data['y'].numpy()
-        probe_type = data.get('probe_type', 'classification')
-        is_multi_label = probe_type == 'multi_label'
-        n_samples, n_layers, hidden_dim = X.shape
-
-        log.info(f"  Eval samples: {n_samples}")
-
-        if verbose:
-            check_class_balance(y, probe, is_multi_label)
-
-        # Evaluate each layer
-        probe_results = {}
-        for layer_idx, model in trained_models.items():
-            if layer_idx >= n_layers:
-                continue
-
-            X_layer = X[:, layer_idx, :]
-            try:
-                test_acc = model.score(X_layer, y)
-                y_pred = model.predict(X_layer)
-                probe_results[layer_idx] = {
-                    'test_acc': test_acc,
-                    'train_acc': test_acc,  # N/A for eval
-                    'y_pred': y_pred,
-                    'y_test': y,
-                }
-
-                if verbose and layer_idx == max(trained_models.keys()):
-                    print(f"\n  Confusion matrix (layer {layers[layer_idx]}):")
-                    cm = confusion_matrix(y, y_pred)
-                    print(f"  {cm}")
-            except Exception as e:
-                log.warning(f"  Layer {layer_idx} eval failed: {e}")
-
-        majority_baseline = get_majority_baseline(y) if not is_multi_label else \
-            np.mean([max(np.mean(y[:, i]), 1-np.mean(y[:, i])) for i in range(y.shape[1])])
-        all_results[probe] = {
-            'results': probe_results,
-            'majority_baseline': majority_baseline,
-            'is_multi_label': is_multi_label,
-        }
-        print_results_table(probe_results, probe, layers, majority_baseline, is_multi_label)
-
-    # Summary
-    print(f"\n{'='*60}")
-    print("EVALUATION SUMMARY")
-    print(f"{'='*60}")
-
-    summary_data = {}
-    for probe, data in all_results.items():
-        results = data['results']
-        baseline = data['majority_baseline']
-
-        if not results:
-            continue
-
-        best_layer_idx = max(results.keys(), key=lambda k: results[k]['test_acc'])
-        best_acc = results[best_layer_idx]['test_acc']
-
-        summary_data[probe] = {
-            'best_layer': layers[best_layer_idx],
-            'best_acc': best_acc,
-            'vs_baseline': best_acc - baseline,
-            'majority_baseline': baseline,
-        }
-
-        probe_info = ALL_PROBE_INFO.get(probe, {'name': probe})
-        status = "PASS" if best_acc > baseline + 0.1 else ("MARGINAL" if best_acc > baseline else "FAIL")
-        print(f"{probe} ({probe_info['name']}):")
-        print(f"  Best: {best_acc:.1%} at layer {layers[best_layer_idx]} (majority: {baseline:.1%}, +{best_acc - baseline:.1%}) [{status}]")
-
-    # Save eval results
-    results_path = eval_data_dir / 'eval_results.json'
-    save_json({
-        'probes': {
-            probe: {
-                'results_by_layer': {
-                    str(layers[k]): {'test_acc': v['test_acc']}
-                    for k, v in data['results'].items()
-                },
-                'best_layer': summary_data.get(probe, {}).get('best_layer'),
-                'best_acc': summary_data.get(probe, {}).get('best_acc'),
-                'majority_baseline': data['majority_baseline'],
-            }
-            for probe, data in all_results.items()
-        },
-        'layers': layers,
-        'mode': 'eval_only',
-    }, results_path)
-
-    log.success(f"Eval results saved to {results_path}")
-
-
 @app.command()
 def main(
     input_dir: Optional[Path] = typer.Option(None, "--input", "-i", help="Input probe data directory"),
     probes: Optional[str] = typer.Option(None, "--probes", "-p", help="Probes to train (comma-separated)"),
-    cv: int = typer.Option(0, "--cv", help="Cross-validation folds (0=train/test split)"),
+    hidden_dim: int = typer.Option(256, "--hidden-dim", help="Hidden dimension for MLP"),
+    epochs: int = typer.Option(30, "--epochs", "-e", help="Training epochs"),
+    batch_size: int = typer.Option(256, "--batch-size", "-b", help="Batch size"),
+    lr: float = typer.Option(1e-3, "--lr", help="Learning rate"),
     test_size: float = typer.Option(0.2, "--test-size", help="Test set fraction"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed metrics"),
-    eval_only: bool = typer.Option(False, "--eval-only", help="Evaluate pre-trained probes only"),
-    eval_data: Optional[Path] = typer.Option(None, "--eval-data", help="Evaluation data directory (for --eval-only)"),
     save_probes: bool = typer.Option(True, "--save-probes/--no-save-probes", help="Save trained probes"),
+    control: bool = typer.Option(False, "--control", "-c", help="Run control task with shuffled labels"),
 ):
-    """Train linear probes and evaluate accuracy."""
+    """Train MLP probes and evaluate accuracy.
+
+    Use --control to run a sanity check with shuffled labels.
+    If the probe performs well on shuffled labels, it has too much capacity.
+    """
     input_path = input_dir or DEFAULT_INPUT
 
     if not input_path.exists():
         log.error(f"Input not found: {input_path}")
         raise typer.Exit(1)
 
-    # Handle eval-only mode
-    if eval_only:
-        if not eval_data:
-            log.error("--eval-data required with --eval-only")
-            raise typer.Exit(1)
-        if not eval_data.exists():
-            log.error(f"Eval data not found: {eval_data}")
-            raise typer.Exit(1)
-        return evaluate_saved_probes(input_path, eval_data, probes, verbose)
+    device = get_device()
+    log.info(f"Using device: {device}")
 
     # Load metadata
     meta_path = input_path / 'metadata.json'
@@ -396,13 +438,22 @@ def main(
     else:
         probe_list = available_probes
 
-    print_header("Linear Probe Training", "All Probes")
+    mode = "CONTROL (shuffled labels)" if control else "Neural Network Probes"
+    print_header("MLP Probe Training", mode)
+    if control:
+        log.warning("CONTROL MODE: Labels will be shuffled. Probe should perform at chance level.")
+
     print_config("Configuration", {
         'input': str(input_path),
         'probes': ', '.join(probe_list),
         'n_probes': len(probe_list),
         'layers': ', '.join(map(str, layers)),
-        'cv_folds': cv if cv > 0 else f"train/test ({test_size:.0%})",
+        'hidden_dim': hidden_dim,
+        'epochs': epochs,
+        'batch_size': batch_size,
+        'learning_rate': lr,
+        'device': str(device),
+        'control_mode': control,
     })
 
     all_results = {}
@@ -424,9 +475,9 @@ def main(
 
         n_samples = X.shape[0]
         n_layers = X.shape[1]
-        hidden_dim = X.shape[2]
+        input_dim = X.shape[2]
 
-        log.info(f"  Samples: {n_samples}, Layers: {n_layers}, Hidden dim: {hidden_dim}")
+        log.info(f"  Samples: {n_samples}, Layers: {n_layers}, Input dim: {input_dim}")
         if is_multi_label:
             log.info(f"  Type: multi-label ({y.shape[1]} labels)")
 
@@ -438,51 +489,83 @@ def main(
             log.warning(f"  Too few samples ({n_samples}), skipping")
             continue
 
+        # Get number of classes
+        if is_multi_label:
+            n_classes = y.shape[1]
+        else:
+            n_classes = len(np.unique(y))
+
         # Train probes for each layer
         probe_results = {}
         trained_models = {}
 
         for layer_idx in range(n_layers):
-            X_layer = X[:, layer_idx, :]  # (n_samples, hidden_dim)
+            X_layer = X[:, layer_idx, :]  # (n_samples, input_dim)
 
-            if is_multi_label:
-                result = train_multi_label_probe(X_layer, y, test_size=test_size)
-                if result:
-                    probe_results[layer_idx] = result
-                    if 'models' in result:
-                        trained_models[layer_idx] = result['models']
-            elif cv > 0:
-                result = train_probe_cv(X_layer, y, cv=cv)
-                if result:
-                    probe_results[layer_idx] = {
-                        'test_acc': result['mean_acc'],
-                        'train_acc': result['mean_acc'],  # Approximate
-                        'std_acc': result['std_acc'],
-                    }
-            else:
-                result = train_probe_single_layer(X_layer, y, test_size=test_size)
-                if result:
-                    probe_results[layer_idx] = result
-                    if 'model' in result:
-                        trained_models[layer_idx] = result['model']
+            # Train/test split
+            X_train, X_test, y_train, y_test = train_test_split(
+                X_layer, y, test_size=test_size, random_state=42,
+                stratify=y if not is_multi_label else None
+            )
 
-                    if verbose and layer_idx == n_layers - 1:
-                        # Print confusion matrix for last layer
-                        print(f"\n  Confusion matrix (layer {layers[layer_idx]}):")
-                        cm = confusion_matrix(result['y_test'], result['y_pred'])
-                        print(f"  {cm}")
+            # Control task: shuffle labels to verify probe isn't memorizing
+            if control:
+                rng = np.random.RandomState(42 + layer_idx)
+                y_train = rng.permutation(y_train)
+                y_test = rng.permutation(y_test)
+
+            try:
+                if is_multi_label:
+                    result = train_mlp_probe_multi_label(
+                        X_train, y_train, X_test, y_test,
+                        n_labels=n_classes,
+                        hidden_dim=hidden_dim,
+                        epochs=epochs,
+                        batch_size=batch_size,
+                        lr=lr,
+                        device=device,
+                    )
+                else:
+                    result = train_mlp_probe(
+                        X_train, y_train, X_test, y_test,
+                        n_classes=n_classes,
+                        hidden_dim=hidden_dim,
+                        epochs=epochs,
+                        batch_size=batch_size,
+                        lr=lr,
+                        device=device,
+                    )
+
+                probe_results[layer_idx] = result
+                if 'model' in result:
+                    trained_models[layer_idx] = result['model']
+
+                if verbose and layer_idx == n_layers - 1 and not is_multi_label:
+                    print(f"\n  Confusion matrix (layer {layers[layer_idx]}):")
+                    cm = confusion_matrix(result['y_test'], result['y_pred'])
+                    print(f"  {cm}")
+
+            except Exception as e:
+                log.warning(f"  Layer {layer_idx} training failed: {e}")
+                continue
 
         # Save trained probes
         if save_probes and trained_models:
-            probes_dir = input_path / 'trained_probes'
+            probes_dir = input_path / 'trained_probes_mlp'
             probes_dir.mkdir(exist_ok=True)
-            probe_path = probes_dir / f"{probe}_probes.joblib"
-            joblib.dump({'models': trained_models, 'layers': layers}, probe_path)
+            probe_path = probes_dir / f"{probe}_probes.pt"
+            torch.save({
+                'models': {k: v.state_dict() for k, v in trained_models.items()},
+                'layers': layers,
+                'hidden_dim': hidden_dim,
+                'input_dim': input_dim,
+                'n_classes': n_classes,
+                'is_multi_label': is_multi_label,
+            }, probe_path)
             log.info(f"  Saved {len(trained_models)} probe models to {probe_path}")
 
         # Calculate majority baseline
         if is_multi_label:
-            # For multi-label, baseline is average per-label majority
             majority_baseline = np.mean([max(np.mean(y[:, i]), 1-np.mean(y[:, i])) for i in range(y.shape[1])])
         else:
             majority_baseline = get_majority_baseline(y)
@@ -526,7 +609,8 @@ def main(
         print(f"  Best: {best_acc:.1%} at layer {layers[best_layer_idx]} (majority: {baseline:.1%}, +{best_acc - baseline:.1%}) [{status}]")
 
     # Save results
-    results_path = input_path / 'probe_results.json'
+    results_filename = 'probe_results_mlp_control.json' if control else 'probe_results_mlp.json'
+    results_path = input_path / results_filename
     save_json({
         'probes': {
             probe: {
@@ -542,29 +626,56 @@ def main(
             for probe, data in all_results.items()
         },
         'layers': layers,
-        'config': {'cv': cv, 'test_size': test_size},
+        'config': {
+            'hidden_dim': hidden_dim,
+            'epochs': epochs,
+            'batch_size': batch_size,
+            'lr': lr,
+            'test_size': test_size,
+            'control_mode': control,
+        },
     }, results_path)
 
     log.success(f"Results saved to {results_path}")
 
     # Success check
     print(f"\n{'='*60}")
-    print("SUCCESS CRITERIA")
+    if control:
+        print("CONTROL CHECK (shuffled labels - probes should fail)")
+    else:
+        print("SUCCESS CRITERIA")
     print(f"{'='*60}")
 
     success_count = 0
+    control_pass_count = 0
     for probe, probe_summary in summary_data.items():
         baseline = probe_summary['majority_baseline']
-        if probe_summary['best_acc'] > baseline + 0.1:
-            print(f"  [PASS] {probe}: {probe_summary['best_acc']:.1%} > majority+10% ({baseline:.1%})")
-            success_count += 1
-        else:
-            print(f"  [    ] {probe}: {probe_summary['best_acc']:.1%} (majority: {baseline:.1%})")
+        beats_baseline = probe_summary['best_acc'] > baseline + 0.1
 
-    if success_count >= 1:
-        print(f"\nVALIDATED: {success_count} probe(s) meet success criteria")
+        if control:
+            # In control mode, probes should NOT beat baseline (shuffled labels)
+            if not beats_baseline:
+                print(f"  [PASS] {probe}: {probe_summary['best_acc']:.1%} ≈ chance ({baseline:.1%}) - probe not memorizing")
+                control_pass_count += 1
+            else:
+                print(f"  [WARN] {probe}: {probe_summary['best_acc']:.1%} > chance ({baseline:.1%}) - probe may have too much capacity")
+        else:
+            if beats_baseline:
+                print(f"  [PASS] {probe}: {probe_summary['best_acc']:.1%} > majority+10% ({baseline:.1%})")
+                success_count += 1
+            else:
+                print(f"  [    ] {probe}: {probe_summary['best_acc']:.1%} (majority: {baseline:.1%})")
+
+    if control:
+        if control_pass_count == len(summary_data):
+            print(f"\nCONTROL PASSED: All {control_pass_count} probe(s) at chance level - no memorization detected")
+        else:
+            print(f"\nCONTROL WARNING: {len(summary_data) - control_pass_count} probe(s) above chance - consider reducing capacity")
     else:
-        print(f"\nNOT YET VALIDATED: No probes meet success criteria")
+        if success_count >= 1:
+            print(f"\nVALIDATED: {success_count} probe(s) meet success criteria")
+        else:
+            print(f"\nNOT YET VALIDATED: No probes meet success criteria")
 
 
 if __name__ == '__main__':
