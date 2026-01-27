@@ -74,15 +74,6 @@ echo "Installing core requirements..."
     tqdm>=4.65.0 \
     loguru
 
-# Try to install flash-attn (optional, requires CUDA)
-echo ""
-echo "Attempting to install flash-attn (optional, CUDA only)..."
-.venv-pip/bin/pip install flash-attn --no-build-isolation 2>/dev/null || {
-    echo ""
-    echo "INFO: flash-attn not installed (requires CUDA + compatible GPU)."
-    echo "      The pipeline will work without it (uses standard attention)."
-}
-
 echo ""
 echo "=========================================="
 echo "Setup complete!"

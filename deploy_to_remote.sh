@@ -124,13 +124,6 @@ fi
 log_info "Installing dependencies..."
 if [[ "$CUDA_AVAILABLE" == "true" ]]; then
     "$VENV_DIR/bin/pip" install -r "$SCRIPT_DIR/requirements_linux.txt"
-
-    # Install Flash Attention 2 for H100/Ampere+ (critical for performance)
-    log_info "Installing Flash Attention 2..."
-    "$VENV_DIR/bin/pip" install flash-attn --no-build-isolation 2>/dev/null || {
-        log_warn "Flash Attention 2 installation failed (may need ninja/CUDA toolkit)"
-        log_warn "Try: pip install ninja && pip install flash-attn --no-build-isolation"
-    }
 else
     # Install without CUDA
     grep -v "extra-index-url" "$SCRIPT_DIR/requirements_linux.txt" | \
@@ -147,12 +140,6 @@ print(f'PyTorch: {torch.__version__}')
 print(f'CUDA available: {torch.cuda.is_available()}')
 if torch.cuda.is_available():
     print(f'CUDA device: {torch.cuda.get_device_name(0)}')
-    # Check for Flash Attention 2
-    try:
-        import flash_attn
-        print(f'Flash Attention: {flash_attn.__version__}')
-    except ImportError:
-        print('Flash Attention: NOT INSTALLED (will use slower attention)')
 print(f'Transformers: {transformers.__version__}')
 print('All dependencies verified!')
 "
