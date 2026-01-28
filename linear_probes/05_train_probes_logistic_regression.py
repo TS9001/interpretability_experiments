@@ -16,7 +16,24 @@ Usage:
     python 05_train_probes_logistic_regression.py
     python 05_train_probes_logistic_regression.py --probes B1,C1,D1
     python 05_train_probes_logistic_regression.py --control  # shuffled labels baseline
-    python 05_train_probes_logistic_regression.py --tune-regularization
+
+Regularization:
+    By default, regularization tuning is OFF (uses fixed C=1.0).
+
+    For rigorous regularization tuning:
+
+    1. Enable 5-fold CV tuning (searches C in [0.001, 0.01, 0.1, 1.0, 10.0]):
+       python 05_train_probes_logistic_regression.py --tune-regularization
+
+    2. Use a specific regularization strength manually (C = 1/lambda):
+       python 05_train_probes_logistic_regression.py -r 0.01  # strong regularization
+       python 05_train_probes_logistic_regression.py -r 1.0   # moderate (default)
+       python 05_train_probes_logistic_regression.py -r 100   # weak regularization
+
+    For publishable results, consider:
+    - Running with --tune-regularization for proper hyperparameter selection
+    - Using nested CV (not implemented) for unbiased performance estimates
+    - Reporting results across multiple C values to show robustness
 """
 from pathlib import Path
 from typing import Optional
@@ -134,18 +151,19 @@ def find_best_regularization(
     for c in REGULARIZATION_GRID:
         clf = LogisticRegression(
             C=c,
-            max_iter=5000,
-            solver='lbfgs',
-                        random_state=42,
+            max_iter=1000,
+            solver='saga',
+            n_jobs=-1,
+            random_state=42,
         )
 
         try:
             stratify = y if can_stratify(y) else None
             if stratify is not None:
                 cv = StratifiedKFold(n_splits=cv_folds, shuffle=True, random_state=42)
-                scores = cross_val_score(clf, X_scaled, y, cv=cv, scoring='accuracy')
+                scores = cross_val_score(clf, X_scaled, y, cv=cv, scoring='accuracy', n_jobs=-1)
             else:
-                scores = cross_val_score(clf, X_scaled, y, cv=cv_folds, scoring='accuracy')
+                scores = cross_val_score(clf, X_scaled, y, cv=cv_folds, scoring='accuracy', n_jobs=-1)
 
             mean_score = scores.mean()
             if mean_score > best_score:
@@ -177,9 +195,10 @@ def train_linear_probe(
     # Train logistic regression with L2 regularization
     clf = LogisticRegression(
         C=regularization_c,
-        max_iter=5000,
-        solver='lbfgs',
-                random_state=42,
+        max_iter=1000,
+        solver='saga',
+        n_jobs=-1,
+        random_state=42,
     )
 
     clf.fit(X_train_proc, y_train)
@@ -253,8 +272,9 @@ def train_multi_label_probe(
 
         clf = LogisticRegression(
             C=regularization_c,
-            max_iter=5000,
-            solver='lbfgs',
+            max_iter=1000,
+            solver='saga',
+            n_jobs=-1,
             random_state=42,
         )
 
@@ -368,7 +388,7 @@ def main(
     probes: Optional[str] = typer.Option(None, "--probes", "-p", help="Probes to train (comma-separated)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed metrics"),
     control: bool = typer.Option(False, "--control", "-c", help="Run control task with shuffled labels"),
-    tune_regularization: bool = typer.Option(True, "--tune-regularization/--no-tune-regularization", "-t", help="Tune L2 regularization via CV"),
+    tune_regularization: bool = typer.Option(False, "--tune-regularization/--no-tune-regularization", "-t", help="Tune L2 regularization via CV (slow, adds ~25 fits per layer)"),
     regularization_c: float = typer.Option(1.0, "--regularization", "-r", help="Regularization strength (C = 1/lambda)"),
     center_only: bool = typer.Option(False, "--center-only", help="Only mean-center activations (no scaling)"),
     save_probes: bool = typer.Option(True, "--save-probes/--no-save-probes", help="Save trained probes"),
