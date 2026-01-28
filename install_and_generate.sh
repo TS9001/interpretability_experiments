@@ -398,10 +398,7 @@ header "Phase 2: Response Generation (GSM8K Train)"
 cd linear_probes
 
 # Build command args
-ARGS=""
-if [ "$MAX_EXAMPLES" != "-1" ]; then
-    ARGS="$ARGS --max-examples $MAX_EXAMPLES"
-fi
+ARGS="--max-examples $MAX_EXAMPLES"
 if [ "$BATCH_SIZE" != "0" ]; then
     ARGS="$ARGS --batch-size $BATCH_SIZE"
 fi

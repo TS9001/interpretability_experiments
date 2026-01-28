@@ -113,11 +113,8 @@ def process_batch(
             # Remove padding tokens from response
             response_ids = response_ids[response_ids != tokenizer.pad_token_id]
 
-            responses.append({
-                'text': tokenizer.decode(response_ids, skip_special_tokens=True),
-                'tokens': tokenizer.convert_ids_to_tokens(response_ids),
-                'token_ids': response_ids.cpu().tolist(),
-            })
+            # Store just the text - tokens are generated on-the-fly during analysis
+            responses.append(tokenizer.decode(response_ids, skip_special_tokens=True))
 
         results.append({
             'index': entry['index'],

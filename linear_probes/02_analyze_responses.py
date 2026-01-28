@@ -285,17 +285,27 @@ def analyze_response(
     response: Union[dict, str],
     ground_truth_final_result: Optional[float],
     ground_truth_operations: list[dict],
+    tokenizer=None,
 ) -> dict:
     """Analyze a single response."""
     # Handle both string and dict formats
     if isinstance(response, str):
         text = response
-        tokens = []
-        token_ids = []
+        # Tokenize string responses on the fly
+        if tokenizer is not None:
+            token_ids = tokenizer(text, add_special_tokens=False)['input_ids']
+            tokens = tokenizer.convert_ids_to_tokens(token_ids)
+        else:
+            tokens = []
+            token_ids = []
     else:
         text = response['text']
         tokens = response.get('tokens', [])
         token_ids = response.get('token_ids', [])
+        # Tokenize if tokens are missing
+        if not tokens and tokenizer is not None:
+            token_ids = tokenizer(text, add_special_tokens=False)['input_ids']
+            tokens = tokenizer.convert_ids_to_tokens(token_ids)
 
     # Extract final answer
     final_answer = extract_final_answer(text)
@@ -328,7 +338,7 @@ def analyze_response(
     }
 
 
-def analyze_example(example: dict, ground_truth: dict) -> dict:
+def analyze_example(example: dict, ground_truth: dict, tokenizer=None) -> dict:
     """Analyze all responses for an example, using ground truth from source data."""
     # Get ground truth from the source tokenized dataset
     ground_truth_final_result = ground_truth.get('final_result')
@@ -339,7 +349,7 @@ def analyze_example(example: dict, ground_truth: dict) -> dict:
 
     analyzed_responses = []
     for resp in example.get('responses', []):
-        analyzed = analyze_response(resp, ground_truth_final_result, ground_truth_operations)
+        analyzed = analyze_response(resp, ground_truth_final_result, ground_truth_operations, tokenizer)
         analyzed_responses.append(analyzed)
 
     # Compute summary stats
@@ -536,7 +546,7 @@ def main(
             if not gt:
                 missing_ground_truth += 1
 
-            analyzed = analyze_example(example, gt)
+            analyzed = analyze_example(example, gt, tokenizer)
             results.append(analyzed)
             progress.advance(task)
 

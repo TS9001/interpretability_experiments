@@ -23,7 +23,8 @@ def extract_hidden_at_positions(
         text,
         return_tensors="pt",
         truncation=True,
-        max_length=max_length
+        max_length=max_length,
+        add_special_tokens=False,  # Must match position calculations
     ).to(device, non_blocking=(device.type == "cuda"))
 
     seq_len = encodings.input_ids.shape[1]
@@ -75,7 +76,8 @@ def extract_hidden_batch(
         return_tensors="pt",
         padding=True,
         truncation=True,
-        max_length=max_length
+        max_length=max_length,
+        add_special_tokens=False,  # Must match position calculations
     ).to(device, non_blocking=(device.type == "cuda"))
 
     batch_size = len(texts)
