@@ -152,8 +152,7 @@ def find_best_regularization(
         clf = LogisticRegression(
             C=c,
             max_iter=1000,
-            solver='lbfgs',
-            verbose=1,
+            solver='liblinear',
             random_state=42,
         )
 
@@ -272,8 +271,7 @@ def train_multi_label_probe(
         clf = LogisticRegression(
             C=regularization_c,
             max_iter=1000,
-            solver='lbfgs',
-            verbose=1,
+            solver='liblinear',
             random_state=42,
         )
 
@@ -488,6 +486,9 @@ def main(
         trained_models = {}
 
         for layer_idx in range(n_layers):
+            layer_num = layers[layer_idx] if layer_idx < len(layers) else layer_idx
+            print(f"    Layer {layer_num} ({layer_idx+1}/{n_layers})...", end=" ", flush=True)
+
             X_train = X_train_all[:, layer_idx, :]
             X_test = X_test_all[:, layer_idx, :]
             y_train = y_train_all.copy()
@@ -525,13 +526,17 @@ def main(
                     probe_results[layer_idx] = result
                     if 'model' in result:
                         trained_models[layer_idx] = result['model']
+                    print(f"acc={result.get('test_acc', 0):.1%}", flush=True)
 
                     if verbose and layer_idx == n_layers - 1 and not is_multi_label:
                         print(f"\n  Confusion matrix (layer {layers[layer_idx]}):")
                         cm = confusion_matrix(result['y_test'], result['y_pred'])
                         print(f"  {cm}")
 
+                else:
+                    print("no result", flush=True)
             except Exception as e:
+                print(f"FAILED: {e}", flush=True)
                 log.warning(f"  Layer {layer_idx} training failed: {e}")
 
         # Save trained probes
