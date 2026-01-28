@@ -4,10 +4,15 @@
 
 set -e
 
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 SPLIT="${1:-train}"
 INPUT="../resources/Qwen2.5-Math-1.5B/${SPLIT}_responses.json"
 
+# Set ground truth data path
+export PROBE_DATA_DIR="$SCRIPT_DIR/../resources/gsm8k/matching"
+
 echo "=== Step 1: Analyze responses ==="
+echo "Ground truth: $PROBE_DATA_DIR"
 python 02_analyze_responses.py "$INPUT"
 
 echo ""

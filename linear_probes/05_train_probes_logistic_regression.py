@@ -27,7 +27,7 @@ import torch
 import typer
 from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
-from sklearn.model_selection import train_test_split, StratifiedKFold, cross_val_score
+from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.metrics import (
     accuracy_score, f1_score, roc_auc_score, confusion_matrix
 )
@@ -39,6 +39,8 @@ app = typer.Typer(add_completion=False)
 
 SCRIPT_DIR = Path(__file__).parent
 DEFAULT_INPUT = SCRIPT_DIR / "probe_data"
+DEFAULT_TRAIN_DIR = DEFAULT_INPUT / "train"
+DEFAULT_TEST_DIR = DEFAULT_INPUT / "test"
 
 # Regularization strengths to search (C = 1/lambda, so smaller C = stronger regularization)
 REGULARIZATION_GRID = [0.001, 0.01, 0.1, 1.0, 10.0]
@@ -134,8 +136,7 @@ def find_best_regularization(
             C=c,
             max_iter=5000,
             solver='lbfgs',
-            n_jobs=-1,
-            random_state=42,
+                        random_state=42,
         )
 
         try:
@@ -178,8 +179,7 @@ def train_linear_probe(
         C=regularization_c,
         max_iter=5000,
         solver='lbfgs',
-        n_jobs=-1,
-        random_state=42,
+                random_state=42,
     )
 
     clf.fit(X_train_proc, y_train)
@@ -362,9 +362,10 @@ def check_class_balance(y: np.ndarray, probe: str, is_multi_label: bool = False)
 
 @app.command()
 def main(
-    input_dir: Optional[Path] = typer.Option(None, "--input", "-i", help="Input probe data directory"),
+    input_dir: Optional[Path] = typer.Option(None, "--input", "-i", help="Base probe data directory (contains train/ and test/ subdirs)"),
+    train_dir: Optional[Path] = typer.Option(None, "--train-dir", help="Training data directory (overrides --input)"),
+    test_dir: Optional[Path] = typer.Option(None, "--test-dir", help="Test data directory (overrides --input)"),
     probes: Optional[str] = typer.Option(None, "--probes", "-p", help="Probes to train (comma-separated)"),
-    test_size: float = typer.Option(0.2, "--test-size", help="Test set fraction"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed metrics"),
     control: bool = typer.Option(False, "--control", "-c", help="Run control task with shuffled labels"),
     tune_regularization: bool = typer.Option(True, "--tune-regularization/--no-tune-regularization", "-t", help="Tune L2 regularization via CV"),
@@ -378,15 +379,24 @@ def main(
     Linear probes are intentionally simple. High accuracy suggests the information
     is linearly accessible in that layer. Use --control to verify with shuffled
     labels - the probe should perform at chance level on random labels.
-    """
-    input_path = input_dir or DEFAULT_INPUT
 
-    if not input_path.exists():
-        log.error(f"Input not found: {input_path}")
+    Expects separate train/ and test/ subdirectories with extracted hidden states.
+    """
+    # Determine train and test directories
+    base_path = input_dir or DEFAULT_INPUT
+    train_path = train_dir or (base_path / "train")
+    test_path = test_dir or (base_path / "test")
+
+    if not train_path.exists():
+        log.error(f"Train directory not found: {train_path}")
         raise typer.Exit(1)
 
-    # Load metadata
-    meta_path = input_path / 'metadata.json'
+    if not test_path.exists():
+        log.error(f"Test directory not found: {test_path}")
+        raise typer.Exit(1)
+
+    # Load metadata from train directory
+    meta_path = train_path / 'metadata.json'
     if meta_path.exists():
         metadata = load_json(meta_path)
         available_probes = metadata.get('probes', list(ALL_PROBE_INFO.keys()))
@@ -406,10 +416,10 @@ def main(
         log.warning("If probe beats chance on shuffled labels, it may be exploiting artifacts.")
 
     print_config("Configuration", {
-        'input': str(input_path),
+        'train_dir': str(train_path),
+        'test_dir': str(test_path),
         'probes': ', '.join(probe_list),
         'layers': ', '.join(map(str, layers)),
-        'test_size': f"{test_size:.0%}",
         'regularization_c': regularization_c if not tune_regularization else "tuned via CV",
         'preprocessing': "center only" if center_only else "standardize (center + scale)",
         'control_mode': control,
@@ -419,28 +429,38 @@ def main(
     control_results = {}
 
     for probe in probe_list:
-        probe_file = input_path / f"{probe}_samples.pt"
+        train_file = train_path / f"{probe}_samples.pt"
+        test_file = test_path / f"{probe}_samples.pt"
 
-        if not probe_file.exists():
-            log.warning(f"Probe data not found: {probe_file}")
+        if not train_file.exists():
+            log.warning(f"Train data not found: {train_file}")
+            continue
+
+        if not test_file.exists():
+            log.warning(f"Test data not found: {test_file}")
             continue
 
         log.info(f"Training {probe}...")
-        data = torch.load(probe_file, weights_only=False)
+        train_data = torch.load(train_file, weights_only=False)
+        test_data = torch.load(test_file, weights_only=False)
 
-        X = data['X'].numpy()  # (n_samples, n_layers, hidden_dim)
-        y = data['y'].numpy()  # (n_samples,) or (n_samples, n_labels)
-        probe_type = data.get('probe_type', 'classification')
+        X_train_all = train_data['X'].numpy()  # (n_samples, n_layers, hidden_dim)
+        y_train_all = train_data['y'].numpy()  # (n_samples,) or (n_samples, n_labels)
+        X_test_all = test_data['X'].numpy()
+        y_test_all = test_data['y'].numpy()
+
+        probe_type = train_data.get('probe_type', 'classification')
         is_multi_label = probe_type == 'multi_label'
 
-        n_samples, n_layers, hidden_dim = X.shape
-        log.info(f"  Samples: {n_samples}, Layers: {n_layers}, Hidden dim: {hidden_dim}")
+        n_train, n_layers, hidden_dim = X_train_all.shape
+        n_test = X_test_all.shape[0]
+        log.info(f"  Train samples: {n_train}, Test samples: {n_test}, Layers: {n_layers}, Hidden dim: {hidden_dim}")
 
         if verbose:
-            check_class_balance(y, probe, is_multi_label)
+            check_class_balance(y_train_all, probe, is_multi_label)
 
-        if n_samples < 50:
-            log.warning(f"  Too few samples ({n_samples}), skipping")
+        if n_train < 50:
+            log.warning(f"  Too few train samples ({n_train}), skipping")
             continue
 
         # Train probes for each layer
@@ -449,13 +469,10 @@ def main(
         trained_models = {}
 
         for layer_idx in range(n_layers):
-            X_layer = X[:, layer_idx, :]
-
-            # Split data (at example level, before any processing)
-            stratify = y if not is_multi_label and can_stratify(y) else None
-            X_train, X_test, y_train, y_test = train_test_split(
-                X_layer, y, test_size=test_size, random_state=42, stratify=stratify
-            )
+            X_train = X_train_all[:, layer_idx, :]
+            X_test = X_test_all[:, layer_idx, :]
+            y_train = y_train_all.copy()
+            y_test = y_test_all.copy()
 
             # Tune regularization if requested
             if tune_regularization:
@@ -500,7 +517,7 @@ def main(
 
         # Save trained probes
         if save_probes and trained_models and not control:
-            probes_dir = input_path / 'trained_probes'
+            probes_dir = base_path / 'trained_probes'
             probes_dir.mkdir(exist_ok=True)
             probe_path = probes_dir / f"{probe}_probes.joblib"
             joblib.dump({
@@ -511,14 +528,14 @@ def main(
             }, probe_path)
             log.info(f"  Saved {len(trained_models)} probe models")
 
-        # Calculate baselines
+        # Calculate baselines (using train set)
         if is_multi_label:
             majority_baseline = np.mean([
-                max(np.mean(y[:, i]), 1 - np.mean(y[:, i]))
-                for i in range(y.shape[1])
+                max(np.mean(y_train_all[:, i]), 1 - np.mean(y_train_all[:, i]))
+                for i in range(y_train_all.shape[1])
             ])
         else:
-            majority_baseline = get_majority_baseline(y)
+            majority_baseline = get_majority_baseline(y_train_all)
 
         all_results[probe] = {
             'results': probe_results,
@@ -574,7 +591,7 @@ def main(
 
     # Save results
     results_filename = 'probe_results_logreg_control.json' if control else 'probe_results_logreg.json'
-    results_path = input_path / results_filename
+    results_path = base_path / results_filename
     save_json({
         'probes': {
             probe: {

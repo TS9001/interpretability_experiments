@@ -36,7 +36,8 @@ from utils.probe_positions import (
 app = typer.Typer(add_completion=False)
 
 SCRIPT_DIR = Path(__file__).parent
-DEFAULT_INPUT = SCRIPT_DIR / "responses/Qwen2.5-Math-1.5B/train_responses_analyzed_probeable.json"
+DEFAULT_INPUT_TRAIN = SCRIPT_DIR / "responses/Qwen2.5-Math-1.5B/train_responses_analyzed_probeable.json"
+DEFAULT_INPUT_TEST = SCRIPT_DIR / "responses/Qwen2.5-Math-1.5B/test_responses_analyzed_probeable.json"
 DEFAULT_OUTPUT = SCRIPT_DIR / "probe_data"
 MODEL_NAME = "Qwen/Qwen2.5-Math-1.5B"
 
@@ -339,6 +340,17 @@ def process_batch(
     return all_samples
 
 
+def detect_split_from_filename(path: Path) -> str:
+    """Detect train/test split from filename."""
+    name = path.name.lower()
+    if 'train' in name:
+        return 'train'
+    elif 'test' in name:
+        return 'test'
+    else:
+        return 'unknown'
+
+
 @app.command()
 def main(
     input_file: Optional[Path] = typer.Option(None, "--input", "-i", help="Input probeable JSON"),
@@ -348,15 +360,31 @@ def main(
     batch_size: int = typer.Option(0, "--batch-size", "-b", help="Batch size (0=auto-detect)"),
     max_examples: int = typer.Option(-1, "--max-examples", "-n", help="Max examples to process (-1=all)"),
     no_flash_attn: bool = typer.Option(False, "--no-flash-attn", help="Disable Flash Attention 2"),
+    split: Optional[str] = typer.Option(None, "--split", "-s", help="Force split name (train/test), auto-detected from filename if not specified"),
 ):
     """Extract hidden states at probe positions for all probes."""
-    input_path = input_file or DEFAULT_INPUT
-    output_path = output_dir or DEFAULT_OUTPUT
+    # Handle input file - use default based on split if not specified
+    if input_file is None:
+        if split == 'test':
+            input_path = DEFAULT_INPUT_TEST
+        else:
+            input_path = DEFAULT_INPUT_TRAIN
+    else:
+        input_path = input_file
 
     if not input_path.exists():
         log.error(f"Input not found: {input_path}")
         raise typer.Exit(1)
 
+    # Detect split from filename if not explicitly provided
+    detected_split = split or detect_split_from_filename(input_path)
+    if detected_split == 'unknown':
+        log.warning(f"Could not detect train/test from filename '{input_path.name}', defaulting to 'train'")
+        detected_split = 'train'
+
+    # Output to split-specific subdirectory
+    base_output = output_dir or DEFAULT_OUTPUT
+    output_path = base_output / detected_split
     output_path.mkdir(parents=True, exist_ok=True)
     layer_indices = parse_csv_ints(layers)
     probe_list = parse_csv_strings(probes, default=ALL_PROBES)
@@ -374,10 +402,11 @@ def main(
         batch_size = get_default_batch_size(device)
         log.info(f"Auto-detected batch size: {batch_size}")
 
-    print_header("Full Hidden State Extraction", "All Probes")
+    print_header("Full Hidden State Extraction", f"All Probes ({detected_split})")
     print_config("Configuration", {
         'input': str(input_path),
         'output': str(output_path),
+        'split': detected_split,
         'model': MODEL_NAME,
         'layers': layers,
         'batch_size': batch_size,
@@ -468,6 +497,7 @@ def main(
         'model': MODEL_NAME,
         'layers': layer_indices,
         'probes': probe_list,
+        'split': detected_split,
         'input_file': str(input_path),
         'samples_per_probe': samples_summary,
     }, output_path / 'metadata.json')

@@ -21,7 +21,6 @@ import torch.nn as nn
 import torch.optim as optim
 from torch.utils.data import DataLoader, TensorDataset
 import typer
-from sklearn.model_selection import train_test_split
 from sklearn.metrics import confusion_matrix, f1_score
 
 from utils.data import load_json, save_json
@@ -31,6 +30,8 @@ app = typer.Typer(add_completion=False)
 
 SCRIPT_DIR = Path(__file__).parent
 DEFAULT_INPUT = SCRIPT_DIR / "probe_data"
+DEFAULT_TRAIN_DIR = DEFAULT_INPUT / "train"
+DEFAULT_TEST_DIR = DEFAULT_INPUT / "test"
 
 # All probes with metadata
 ALL_PROBE_INFO = {
@@ -397,13 +398,14 @@ def check_class_balance(y: np.ndarray, probe: str, is_multi_label: bool = False)
 
 @app.command()
 def main(
-    input_dir: Optional[Path] = typer.Option(None, "--input", "-i", help="Input probe data directory"),
+    input_dir: Optional[Path] = typer.Option(None, "--input", "-i", help="Base probe data directory (contains train/ and test/ subdirs)"),
+    train_dir: Optional[Path] = typer.Option(None, "--train-dir", help="Training data directory (overrides --input)"),
+    test_dir: Optional[Path] = typer.Option(None, "--test-dir", help="Test data directory (overrides --input)"),
     probes: Optional[str] = typer.Option(None, "--probes", "-p", help="Probes to train (comma-separated)"),
     hidden_dim: int = typer.Option(256, "--hidden-dim", help="Hidden dimension for MLP"),
     epochs: int = typer.Option(30, "--epochs", "-e", help="Training epochs"),
     batch_size: int = typer.Option(256, "--batch-size", "-b", help="Batch size"),
     lr: float = typer.Option(1e-3, "--lr", help="Learning rate"),
-    test_size: float = typer.Option(0.2, "--test-size", help="Test set fraction"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed metrics"),
     save_probes: bool = typer.Option(True, "--save-probes/--no-save-probes", help="Save trained probes"),
     control: bool = typer.Option(False, "--control", "-c", help="Run control task with shuffled labels"),
@@ -412,18 +414,27 @@ def main(
 
     Use --control to run a sanity check with shuffled labels.
     If the probe performs well on shuffled labels, it has too much capacity.
-    """
-    input_path = input_dir or DEFAULT_INPUT
 
-    if not input_path.exists():
-        log.error(f"Input not found: {input_path}")
+    Expects separate train/ and test/ subdirectories with extracted hidden states.
+    """
+    # Determine train and test directories
+    base_path = input_dir or DEFAULT_INPUT
+    train_path = train_dir or (base_path / "train")
+    test_path = test_dir or (base_path / "test")
+
+    if not train_path.exists():
+        log.error(f"Train directory not found: {train_path}")
+        raise typer.Exit(1)
+
+    if not test_path.exists():
+        log.error(f"Test directory not found: {test_path}")
         raise typer.Exit(1)
 
     device = get_device()
     log.info(f"Using device: {device}")
 
-    # Load metadata
-    meta_path = input_path / 'metadata.json'
+    # Load metadata from train directory
+    meta_path = train_path / 'metadata.json'
     if meta_path.exists():
         metadata = load_json(meta_path)
         available_probes = metadata.get('probes', list(ALL_PROBE_INFO.keys()))
@@ -444,7 +455,8 @@ def main(
         log.warning("CONTROL MODE: Labels will be shuffled. Probe should perform at chance level.")
 
     print_config("Configuration", {
-        'input': str(input_path),
+        'train_dir': str(train_path),
+        'test_dir': str(test_path),
         'probes': ', '.join(probe_list),
         'n_probes': len(probe_list),
         'layers': ', '.join(map(str, layers)),
@@ -459,54 +471,61 @@ def main(
     all_results = {}
 
     for probe in probe_list:
-        probe_file = input_path / f"{probe}_samples.pt"
+        train_file = train_path / f"{probe}_samples.pt"
+        test_file = test_path / f"{probe}_samples.pt"
 
-        if not probe_file.exists():
-            log.warning(f"Probe data not found: {probe_file}")
+        if not train_file.exists():
+            log.warning(f"Train data not found: {train_file}")
+            continue
+
+        if not test_file.exists():
+            log.warning(f"Test data not found: {test_file}")
             continue
 
         log.info(f"Loading {probe} data...")
-        data = torch.load(probe_file, weights_only=False)
+        train_data = torch.load(train_file, weights_only=False)
+        test_data = torch.load(test_file, weights_only=False)
 
-        X = data['X'].numpy()  # (n_samples, n_layers, hidden_dim)
-        y = data['y'].numpy()  # (n_samples,) or (n_samples, n_labels)
-        probe_type = data.get('probe_type', 'classification')
+        X_train_all = train_data['X'].numpy()  # (n_samples, n_layers, hidden_dim)
+        y_train_all = train_data['y'].numpy()  # (n_samples,) or (n_samples, n_labels)
+        X_test_all = test_data['X'].numpy()
+        y_test_all = test_data['y'].numpy()
+
+        probe_type = train_data.get('probe_type', 'classification')
         is_multi_label = probe_type == 'multi_label'
 
-        n_samples = X.shape[0]
-        n_layers = X.shape[1]
-        input_dim = X.shape[2]
+        n_train = X_train_all.shape[0]
+        n_test = X_test_all.shape[0]
+        n_layers = X_train_all.shape[1]
+        input_dim = X_train_all.shape[2]
 
-        log.info(f"  Samples: {n_samples}, Layers: {n_layers}, Input dim: {input_dim}")
+        log.info(f"  Train samples: {n_train}, Test samples: {n_test}, Layers: {n_layers}, Input dim: {input_dim}")
         if is_multi_label:
-            log.info(f"  Type: multi-label ({y.shape[1]} labels)")
+            log.info(f"  Type: multi-label ({y_train_all.shape[1]} labels)")
 
         if verbose:
-            check_class_balance(y, probe, is_multi_label)
+            check_class_balance(y_train_all, probe, is_multi_label)
 
         # Check for enough samples
-        if n_samples < 50:
-            log.warning(f"  Too few samples ({n_samples}), skipping")
+        if n_train < 50:
+            log.warning(f"  Too few train samples ({n_train}), skipping")
             continue
 
         # Get number of classes
         if is_multi_label:
-            n_classes = y.shape[1]
+            n_classes = y_train_all.shape[1]
         else:
-            n_classes = len(np.unique(y))
+            n_classes = len(np.unique(y_train_all))
 
         # Train probes for each layer
         probe_results = {}
         trained_models = {}
 
         for layer_idx in range(n_layers):
-            X_layer = X[:, layer_idx, :]  # (n_samples, input_dim)
-
-            # Train/test split
-            X_train, X_test, y_train, y_test = train_test_split(
-                X_layer, y, test_size=test_size, random_state=42,
-                stratify=y if not is_multi_label else None
-            )
+            X_train = X_train_all[:, layer_idx, :]  # (n_samples, input_dim)
+            X_test = X_test_all[:, layer_idx, :]
+            y_train = y_train_all.copy()
+            y_test = y_test_all.copy()
 
             # Control task: shuffle labels to verify probe isn't memorizing
             if control:
@@ -551,7 +570,7 @@ def main(
 
         # Save trained probes
         if save_probes and trained_models:
-            probes_dir = input_path / 'trained_probes_mlp'
+            probes_dir = base_path / 'trained_probes_mlp'
             probes_dir.mkdir(exist_ok=True)
             probe_path = probes_dir / f"{probe}_probes.pt"
             torch.save({
@@ -564,11 +583,11 @@ def main(
             }, probe_path)
             log.info(f"  Saved {len(trained_models)} probe models to {probe_path}")
 
-        # Calculate majority baseline
+        # Calculate majority baseline (using train set)
         if is_multi_label:
-            majority_baseline = np.mean([max(np.mean(y[:, i]), 1-np.mean(y[:, i])) for i in range(y.shape[1])])
+            majority_baseline = np.mean([max(np.mean(y_train_all[:, i]), 1-np.mean(y_train_all[:, i])) for i in range(y_train_all.shape[1])])
         else:
-            majority_baseline = get_majority_baseline(y)
+            majority_baseline = get_majority_baseline(y_train_all)
 
         all_results[probe] = {
             'results': probe_results,
@@ -610,7 +629,7 @@ def main(
 
     # Save results
     results_filename = 'probe_results_mlp_control.json' if control else 'probe_results_mlp.json'
-    results_path = input_path / results_filename
+    results_path = base_path / results_filename
     save_json({
         'probes': {
             probe: {
