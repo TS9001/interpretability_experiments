@@ -153,6 +153,7 @@ def find_best_regularization(
             C=c,
             max_iter=1000,
             solver='lbfgs',
+            verbose=1,
             random_state=42,
         )
 
@@ -272,6 +273,7 @@ def train_multi_label_probe(
             C=regularization_c,
             max_iter=1000,
             solver='lbfgs',
+            verbose=1,
             random_state=42,
         )
 
