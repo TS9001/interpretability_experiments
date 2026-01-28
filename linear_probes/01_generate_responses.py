@@ -130,7 +130,7 @@ app = typer.Typer()
 
 @app.command()
 def main(
-    max_examples: MaxExamples = 10,
+    max_examples: MaxExamples = -1,
     output_dir: OutputDir = None,
     split: Split = "both",
     resume: Resume = False,
