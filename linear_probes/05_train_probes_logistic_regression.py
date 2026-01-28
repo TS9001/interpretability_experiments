@@ -152,8 +152,7 @@ def find_best_regularization(
         clf = LogisticRegression(
             C=c,
             max_iter=1000,
-            solver='saga',
-            n_jobs=-1,
+            solver='lbfgs',
             random_state=42,
         )
 
@@ -196,8 +195,7 @@ def train_linear_probe(
     clf = LogisticRegression(
         C=regularization_c,
         max_iter=1000,
-        solver='saga',
-        n_jobs=-1,
+        solver='lbfgs',
         random_state=42,
     )
 
@@ -273,8 +271,7 @@ def train_multi_label_probe(
         clf = LogisticRegression(
             C=regularization_c,
             max_iter=1000,
-            solver='saga',
-            n_jobs=-1,
+            solver='lbfgs',
             random_state=42,
         )
 
