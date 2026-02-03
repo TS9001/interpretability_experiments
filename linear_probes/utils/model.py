@@ -95,11 +95,11 @@ def get_default_batch_size(device: torch.device) -> int:
     if device.type == "cuda":
         mem_gb = torch.cuda.get_device_properties(0).total_memory / 1e9
         if mem_gb >= 70:  # H100 80GB
-            return 96  # Benchmarked: 128 is optimal but 96 is safer
+            return 128  # Optimal for H100 with Flash Attention 2
         elif mem_gb >= 40:  # A100 40GB
-            return 48
+            return 64
         else:
-            return 16
+            return 24
     elif device.type == "mps":
         return 4
     return 2  # CPU
@@ -139,7 +139,7 @@ def load_model_and_tokenizer(
     # Enable Flash Attention 2 on CUDA (2-4x faster attention on H100)
     if use_flash_attn and device.type == "cuda":
         try:
-            model_kwargs["attn_implementation"] = "eager"
+            model_kwargs["attn_implementation"] = "flash_attention_2"
             log.info("Flash Attention 2 enabled")
         except Exception as e:
             log.warning(f"Flash Attention 2 not available: {e}")

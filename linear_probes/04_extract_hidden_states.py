@@ -360,6 +360,7 @@ def main(
     batch_size: int = typer.Option(0, "--batch-size", "-b", help="Batch size (0=auto-detect)"),
     max_examples: int = typer.Option(-1, "--max-examples", "-n", help="Max examples to process (-1=all)"),
     no_flash_attn: bool = typer.Option(False, "--no-flash-attn", help="Disable Flash Attention 2"),
+    compile_model: bool = typer.Option(False, "--compile", help="Use torch.compile for faster inference (H100)"),
     split: Optional[str] = typer.Option(None, "--split", "-s", help="Force split name (train/test), auto-detected from filename if not specified"),
 ):
     """Extract hidden states at probe positions for all probes."""
@@ -417,7 +418,7 @@ def main(
     # Load model
     log.info(f"Loading model on {device}...")
     model, tokenizer = load_model_and_tokenizer(
-        MODEL_NAME, device, use_flash_attn=not no_flash_attn
+        MODEL_NAME, device, use_flash_attn=not no_flash_attn, use_compile=compile_model
     )
 
     # IMPORTANT: Use right padding for position-accurate hidden state extraction
