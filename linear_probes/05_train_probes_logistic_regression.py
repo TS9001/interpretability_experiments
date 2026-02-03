@@ -8,14 +8,19 @@ it suggests the information is linearly accessible in that layer.
 
 Key features:
 - L2 regularization with strength tuning via cross-validation
-- Control task with shuffled labels to verify genuine signal
-- Reports accuracy, AUC, and F1 scores
+- Hewitt-style control tasks to measure probe selectivity
+- Reports accuracy, AUC, F1, and selectivity scores
 - Optional mean-centering vs full standardization
+
+Control Tasks (Hewitt & Liang, EMNLP 2019):
+    Uses type-consistent random labeling to test if probes memorize vs extract info.
+    Selectivity = linguistic_accuracy - control_accuracy
+    High selectivity → information genuinely encoded in representations
 
 Usage:
     python 05_train_probes_logistic_regression.py
     python 05_train_probes_logistic_regression.py --probes B1,C1,D1
-    python 05_train_probes_logistic_regression.py --control  # shuffled labels baseline
+    python 05_train_probes_logistic_regression.py --control  # run control task
 
 Regularization:
     By default, regularization tuning is OFF (uses fixed C=0.01).
@@ -51,6 +56,11 @@ from sklearn.metrics import (
 
 from utils.data import load_json, save_json
 from utils.logging import log, print_header, print_config
+from utils.control_tasks import (
+    create_matched_control_labels,
+    create_matched_control_labels_multilabel,
+    compute_selectivity,
+)
 
 app = typer.Typer(add_completion=False)
 
@@ -319,25 +329,25 @@ def print_results_table(
     layers: list[int],
     majority_baseline: float,
     is_multi_label: bool = False,
-    control_baseline: Optional[dict] = None,
+    show_selectivity: bool = False,
 ):
-    """Print formatted results table with optional control comparison."""
+    """Print formatted results table with optional selectivity metrics."""
     info = ALL_PROBE_INFO.get(probe, {'name': probe})
 
-    print(f"\n{'='*70}")
+    print(f"\n{'='*80}")
     print(f"Probe {probe}: {info['name']}")
     if is_multi_label:
         print(f"Type: Multi-label ({info.get('n_labels', 4)} labels)")
     print(f"Majority baseline: {majority_baseline:.1%}")
-    print(f"{'='*70}")
+    print(f"{'='*80}")
 
     if is_multi_label:
         header = f"{'Layer':>6} {'Test Acc':>9} {'Mean F1':>8} {'vs Maj':>8}"
     else:
         header = f"{'Layer':>6} {'Test Acc':>9} {'Train':>7} {'F1':>7} {'AUC':>7} {'vs Maj':>8}"
 
-    if control_baseline:
-        header += f" {'Control':>8}"
+    if show_selectivity:
+        header += f" {'Control':>8} {'Select':>8}"
     print(header)
     print("-" * len(header))
 
@@ -360,9 +370,14 @@ def print_results_table(
             auc_str = f"{auc:.3f}" if auc else "N/A"
             line = f"{layer:>6} {test_acc:>9.1%} {train_acc:>7.1%} {f1:>7.3f} {auc_str:>7} {sign}{vs_maj:>7.1%}"
 
-        if control_baseline and layer_idx in control_baseline:
-            ctrl_acc = control_baseline[layer_idx]['test_acc']
-            line += f" {ctrl_acc:>8.1%}"
+        if show_selectivity:
+            ctrl_acc = r.get('control_acc')
+            selectivity = r.get('selectivity')
+            if ctrl_acc is not None and selectivity is not None:
+                sel_sign = '+' if selectivity > 0 else ''
+                line += f" {ctrl_acc:>8.1%} {sel_sign}{selectivity:>7.1%}"
+            else:
+                line += f" {'N/A':>8} {'N/A':>8}"
 
         print(line)
 
@@ -391,7 +406,8 @@ def main(
     test_dir: Optional[Path] = typer.Option(None, "--test-dir", help="Test data directory (overrides --input)"),
     probes: Optional[str] = typer.Option(None, "--probes", "-p", help="Probes to train (comma-separated)"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed metrics"),
-    control: bool = typer.Option(False, "--control", "-c", help="Run control task with shuffled labels"),
+    control: bool = typer.Option(False, "--control", "-c", help="Run control task only (Hewitt-style)"),
+    with_selectivity: bool = typer.Option(False, "--with-selectivity", "-s", help="Run both tasks and compute selectivity (2x time)"),
     tune_regularization: bool = typer.Option(False, "--tune-regularization/--no-tune-regularization", "-t", help="Tune L2 regularization via CV (slow, adds ~25 fits per layer)"),
     regularization_c: float = typer.Option(0.01, "--regularization", "-r", help="Regularization strength (C = 1/lambda, lower = stronger)"),
     center_only: bool = typer.Option(False, "--center-only", help="Only mean-center activations (no scaling)"),
@@ -433,12 +449,19 @@ def main(
     # Parse probe list
     probe_list = [p.strip() for p in probes.split(',')] if probes else available_probes
 
-    mode = "CONTROL (shuffled labels)" if control else "Linear Probes"
+    if with_selectivity:
+        mode = "Linear Probes + Selectivity (Hewitt control)"
+    elif control:
+        mode = "CONTROL ONLY (Hewitt-style)"
+    else:
+        mode = "Linear Probes"
     print_header("Logistic Regression Probe Training", mode)
 
     if control:
-        log.warning("CONTROL MODE: Labels shuffled. Probe should perform at chance level.")
-        log.warning("If probe beats chance on shuffled labels, it may be exploiting artifacts.")
+        log.warning("CONTROL MODE: Hewitt-style control task (type-consistent random labels).")
+    if with_selectivity:
+        log.info("SELECTIVITY MODE: Training both real + control tasks to compute selectivity.")
+        log.info("Selectivity = linguistic_acc - control_acc. High selectivity = genuine signal.")
 
     print_config("Configuration", {
         'train_dir': str(train_path),
@@ -449,6 +472,7 @@ def main(
         'preprocessing': "center only" if center_only else "standardize (center + scale)",
         'class_weight': 'balanced' if balanced else 'none',
         'control_mode': control,
+        'with_selectivity': with_selectivity,
     })
 
     all_results = {}
@@ -511,39 +535,91 @@ def main(
             else:
                 c = regularization_c
 
-            # Apply control: shuffle labels
-            y_train_used = y_train.copy()
-            y_test_used = y_test.copy()
-            if control:
-                rng = np.random.RandomState(42 + layer_idx)
-                y_train_used = rng.permutation(y_train_used)
-                y_test_used = rng.permutation(y_test_used)
+            # Generate Hewitt-style control labels if needed
+            # Each unique "type" (based on hidden state features) gets a consistent
+            # random label. This tests if the probe memorizes input patterns vs
+            # extracts genuine information from representations.
+            if control or with_selectivity:
+                if is_multi_label:
+                    n_labels = y_train.shape[1]
+                    y_train_ctrl, y_test_ctrl = create_matched_control_labels_multilabel(
+                        X_train, X_test, n_labels=n_labels,
+                        n_bins=100, seed=42 + layer_idx
+                    )
+                else:
+                    n_classes = len(np.unique(y_train))
+                    y_train_ctrl, y_test_ctrl = create_matched_control_labels(
+                        X_train, X_test, n_classes=n_classes,
+                        n_bins=100, seed=42 + layer_idx
+                    )
 
             try:
-                if is_multi_label:
-                    result = train_multi_label_probe(
-                        X_train, y_train_used, X_test, y_test_used,
-                        regularization_c=c, center_only=center_only, balanced=balanced
-                    )
+                # Train on real labels (unless control-only mode)
+                if not control:
+                    if is_multi_label:
+                        result = train_multi_label_probe(
+                            X_train, y_train, X_test, y_test,
+                            regularization_c=c, center_only=center_only, balanced=balanced
+                        )
+                    else:
+                        result = train_linear_probe(
+                            X_train, y_train, X_test, y_test,
+                            regularization_c=c, center_only=center_only, balanced=balanced
+                        )
+
+                    if result:
+                        probe_results[layer_idx] = result
+                        if 'model' in result:
+                            trained_models[layer_idx] = result['model']
+
+                # Train on control labels (if control mode or selectivity mode)
+                if control or with_selectivity:
+                    if is_multi_label:
+                        ctrl_result = train_multi_label_probe(
+                            X_train, y_train_ctrl, X_test, y_test_ctrl,
+                            regularization_c=c, center_only=center_only, balanced=balanced
+                        )
+                    else:
+                        ctrl_result = train_linear_probe(
+                            X_train, y_train_ctrl, X_test, y_test_ctrl,
+                            regularization_c=c, center_only=center_only, balanced=balanced
+                        )
+
+                    if ctrl_result:
+                        probe_control_results[layer_idx] = ctrl_result
+
+                # Print results
+                if control:
+                    # Control-only mode
+                    if ctrl_result:
+                        print(f"ctrl_acc={ctrl_result.get('test_acc', 0):.1%}", flush=True)
+                    else:
+                        print("no result", flush=True)
+                elif with_selectivity:
+                    # Selectivity mode: show both + selectivity
+                    if result and ctrl_result:
+                        real_acc = result.get('test_acc', 0)
+                        ctrl_acc = ctrl_result.get('test_acc', 0)
+                        selectivity = real_acc - ctrl_acc
+                        result['control_acc'] = ctrl_acc
+                        result['selectivity'] = selectivity
+                        print(f"acc={real_acc:.1%} ctrl={ctrl_acc:.1%} sel={selectivity:+.1%}", flush=True)
+                    elif result:
+                        print(f"acc={result.get('test_acc', 0):.1%} (ctrl failed)", flush=True)
+                    else:
+                        print("no result", flush=True)
                 else:
-                    result = train_linear_probe(
-                        X_train, y_train_used, X_test, y_test_used,
-                        regularization_c=c, center_only=center_only, balanced=balanced
-                    )
+                    # Normal mode
+                    if result:
+                        print(f"acc={result.get('test_acc', 0):.1%}", flush=True)
+                    else:
+                        print("no result", flush=True)
 
-                if result:
-                    probe_results[layer_idx] = result
-                    if 'model' in result:
-                        trained_models[layer_idx] = result['model']
-                    print(f"acc={result.get('test_acc', 0):.1%}", flush=True)
+                if verbose and layer_idx == n_layers - 1 and not is_multi_label and result:
+                    print(f"\n  Confusion matrix (layer {layers[layer_idx]}):")
+                    cm = confusion_matrix(result['y_test'], result['y_pred'])
+                    print(f"  {cm}")
 
-                    if verbose and layer_idx == n_layers - 1 and not is_multi_label:
-                        print(f"\n  Confusion matrix (layer {layers[layer_idx]}):")
-                        cm = confusion_matrix(result['y_test'], result['y_pred'])
-                        print(f"  {cm}")
-
-                else:
-                    print("no result", flush=True)
             except Exception as e:
                 print(f"FAILED: {e}", flush=True)
                 log.warning(f"  Layer {layer_idx} training failed: {e}")
@@ -572,12 +648,14 @@ def main(
 
         all_results[probe] = {
             'results': probe_results,
+            'control_results': probe_control_results if (control or with_selectivity) else {},
             'majority_baseline': majority_baseline,
             'is_multi_label': is_multi_label,
         }
 
         print_results_table(
-            probe_results, probe, layers, majority_baseline, is_multi_label
+            probe_results, probe, layers, majority_baseline, is_multi_label,
+            show_selectivity=with_selectivity
         )
 
     # Summary
@@ -598,6 +676,10 @@ def main(
         best_f1 = results[best_layer_idx].get('test_f1', 0)
         best_auc = results[best_layer_idx].get('test_auc')
 
+        # Get selectivity if available
+        best_ctrl_acc = results[best_layer_idx].get('control_acc')
+        best_selectivity = results[best_layer_idx].get('selectivity')
+
         summary_data[probe] = {
             'best_layer': layers[best_layer_idx],
             'best_acc': best_acc,
@@ -605,6 +687,8 @@ def main(
             'best_auc': best_auc,
             'vs_baseline': best_acc - baseline,
             'majority_baseline': baseline,
+            'control_acc': best_ctrl_acc,
+            'selectivity': best_selectivity,
         }
 
         probe_info = ALL_PROBE_INFO.get(probe, {'name': probe})
@@ -613,17 +697,34 @@ def main(
         if control:
             # Control mode: should NOT beat baseline
             status = "PASS (at chance)" if not beats_baseline else "WARN (above chance)"
+        elif with_selectivity and best_selectivity is not None:
+            # Selectivity mode: judge by selectivity
+            if best_selectivity > 0.1:
+                status = "HIGH_SEL"
+            elif best_selectivity > 0.05:
+                status = "MOD_SEL"
+            elif best_selectivity > 0:
+                status = "LOW_SEL"
+            else:
+                status = "NOT_SEL"
         else:
             status = "PASS" if beats_baseline else ("MARGINAL" if best_acc > baseline else "FAIL")
 
         print(f"{probe} ({probe_info['name']}):")
         print(f"  Best: {best_acc:.1%} at layer {layers[best_layer_idx]} "
               f"(majority: {baseline:.1%}, +{best_acc - baseline:.1%}) [{status}]")
+        if with_selectivity and best_selectivity is not None:
+            print(f"  Selectivity: {best_selectivity:+.1%} (control: {best_ctrl_acc:.1%})")
         if best_auc:
             print(f"  AUC: {best_auc:.3f}, F1: {best_f1:.3f}")
 
     # Save results
-    results_filename = 'probe_results_logreg_control.json' if control else 'probe_results_logreg.json'
+    if with_selectivity:
+        results_filename = 'probe_results_logreg_selectivity.json'
+    elif control:
+        results_filename = 'probe_results_logreg_control.json'
+    else:
+        results_filename = 'probe_results_logreg.json'
     results_path = base_path / results_filename
     save_json({
         'probes': {
@@ -634,11 +735,14 @@ def main(
                         'train_acc': float(v.get('train_acc', v['test_acc'])),
                         'f1': float(v['test_f1']) if v.get('test_f1') is not None else None,
                         'auc': float(v['test_auc']) if v.get('test_auc') is not None else None,
+                        'control_acc': float(v['control_acc']) if v.get('control_acc') is not None else None,
+                        'selectivity': float(v['selectivity']) if v.get('selectivity') is not None else None,
                     }
                     for k, v in data['results'].items()
                 },
                 'best_layer': summary_data.get(probe, {}).get('best_layer'),
                 'best_acc': float(summary_data[probe]['best_acc']) if probe in summary_data else None,
+                'best_selectivity': float(summary_data[probe]['selectivity']) if probe in summary_data and summary_data[probe].get('selectivity') is not None else None,
                 'majority_baseline': float(data['majority_baseline']),
                 'is_multi_label': data['is_multi_label'],
             }
@@ -650,6 +754,7 @@ def main(
             'tune_regularization': tune_regularization,
             'center_only': center_only,
             'control_mode': control,
+            'with_selectivity': with_selectivity,
         },
     }, results_path)
 
@@ -659,16 +764,20 @@ def main(
     print(f"\n{'='*70}")
     if control:
         print("CONTROL CHECK (shuffled labels - probes should fail)")
+    elif with_selectivity:
+        print("SELECTIVITY ANALYSIS (Hewitt et al. 2019)")
     else:
         print("SUCCESS CRITERIA")
     print(f"{'='*70}")
 
     success_count = 0
     control_pass_count = 0
+    high_sel_count = 0
 
     for probe, probe_summary in summary_data.items():
         baseline = probe_summary['majority_baseline']
         beats_baseline = probe_summary['best_acc'] > baseline + 0.1
+        selectivity = probe_summary.get('selectivity')
 
         if control:
             if not beats_baseline:
@@ -676,6 +785,16 @@ def main(
                 control_pass_count += 1
             else:
                 print(f"  [WARN] {probe}: {probe_summary['best_acc']:.1%} > chance - may have artifacts")
+        elif with_selectivity and selectivity is not None:
+            if selectivity > 0.1:
+                print(f"  [HIGH] {probe}: selectivity={selectivity:+.1%} (acc={probe_summary['best_acc']:.1%}, ctrl={probe_summary['control_acc']:.1%})")
+                high_sel_count += 1
+            elif selectivity > 0.05:
+                print(f"  [MOD ] {probe}: selectivity={selectivity:+.1%} (acc={probe_summary['best_acc']:.1%}, ctrl={probe_summary['control_acc']:.1%})")
+            elif selectivity > 0:
+                print(f"  [LOW ] {probe}: selectivity={selectivity:+.1%} (acc={probe_summary['best_acc']:.1%}, ctrl={probe_summary['control_acc']:.1%})")
+            else:
+                print(f"  [NONE] {probe}: selectivity={selectivity:+.1%} - probe may just memorize")
         else:
             if beats_baseline:
                 print(f"  [PASS] {probe}: {probe_summary['best_acc']:.1%} > majority+10%")
@@ -688,6 +807,9 @@ def main(
             print(f"\nCONTROL PASSED: All probes at chance level - genuine signal verified")
         else:
             print(f"\nCONTROL WARNING: Some probes above chance - check for data artifacts")
+    elif with_selectivity:
+        print(f"\nSELECTIVITY SUMMARY: {high_sel_count}/{len(summary_data)} probes have HIGH selectivity (>10%)")
+        print("High selectivity = information genuinely encoded in representations")
     else:
         if success_count >= 1:
             print(f"\nVALIDATED: {success_count} probe(s) meet success criteria")

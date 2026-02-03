@@ -5,6 +5,7 @@
 #
 # Usage:
 #   ./remote_setup.sh "ssh -p 59672 root@192.222.52.140 -i ~/.ssh/vastai"
+#   ./remote_setup.sh "ssh ..." --all-layers    # Use all 28 layers instead of key 9
 #
 # =============================================================================
 
@@ -23,6 +24,19 @@ LOCAL_TRAJECTORIES="$SCRIPT_DIR/linear_probes/resources/Qwen2.5-Math-1.5B"
 REMOTE_WORKSPACE="/workspace"
 REMOTE_REPO="$REMOTE_WORKSPACE/interpretability_experiments"
 REPO_URL="https://github.com/TS9001/interpretability_experiments.git"
+
+# Layers where probes showed best results (from experiments)
+# 0=baseline, 6/8=D6, 14=D2/D3, 16=C3_div, 21=A1/C1, 22=C4/D1, 27=B1/B2
+DEFAULT_LAYERS="0,6,7,8,14,16,21,22,27"
+LAYERS="$DEFAULT_LAYERS"
+
+# Parse --all-layers flag
+if [[ "$2" == "--all-layers" ]]; then
+    LAYERS="all"
+    log "Using ALL 28 layers"
+else
+    log "Using key layers: $LAYERS"
+fi
 
 log() { echo -e "${BLUE}[$(date '+%H:%M:%S')]${NC} $1"; }
 success() { echo -e "${GREEN}[OK]${NC} $1"; }
@@ -152,10 +166,11 @@ ssh $SSH_OPTS "$SSH_HOST" "
             --input \"responses/Qwen2.5-Math-1.5B/\${SPLIT}_responses_analyzed.json\" \\
             --per-operation
 
-        echo '[3/3] Extracting hidden states...'
+        echo '[3/3] Extracting hidden states (layers: $LAYERS)...'
         python 04_extract_hidden_states.py \\
             --input \"responses/Qwen2.5-Math-1.5B/\${SPLIT}_responses_analyzed_probeable.json\" \\
-            --split \$SPLIT
+            --split \$SPLIT \\
+            --layers $LAYERS
     done
 "
 success "Pipeline complete"
@@ -166,8 +181,9 @@ header "Done!"
 echo ""
 echo -e "${GREEN}Remote setup complete!${NC}"
 echo ""
-echo "To train probes:"
+echo "To train probes with selectivity (Hewitt control tasks):"
 echo "  $SSH_CMD"
 echo "  cd $REMOTE_REPO/linear_probes && source ../.venv-pip/bin/activate"
-echo "  python 05_train_probes.py"
+echo "  python 05_train_probes_logistic_regression.py --with-selectivity"
+echo "  python 05_train_probes.py --with-selectivity"
 echo ""

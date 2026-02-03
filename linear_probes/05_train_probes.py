@@ -6,11 +6,18 @@ Trains PyTorch MLP probes on extracted hidden states and reports accuracy per la
 Uses GPU if available for fast training. Supports:
 - Classification probes (most probes)
 - Multi-label probes (A1)
+- Hewitt-style control tasks to measure probe selectivity
+
+Control Tasks (Hewitt & Liang, EMNLP 2019):
+    Uses type-consistent random labeling to test if probes memorize vs extract info.
+    Selectivity = linguistic_accuracy - control_accuracy
+    High selectivity → information genuinely encoded in representations
 
 Usage:
     python 05_train_probes.py
     python 05_train_probes.py --probes B1,C1,D1
     python 05_train_probes.py --hidden-dim 256 --epochs 50
+    python 05_train_probes.py --control  # run Hewitt-style control task
 """
 from pathlib import Path
 from typing import Optional
@@ -25,6 +32,11 @@ from sklearn.metrics import confusion_matrix, f1_score
 
 from utils.data import load_json, save_json
 from utils.logging import log, print_header, print_config, print_summary
+from utils.control_tasks import (
+    create_matched_control_labels,
+    create_matched_control_labels_multilabel,
+    compute_selectivity,
+)
 
 app = typer.Typer(add_completion=False)
 
@@ -408,12 +420,13 @@ def main(
     lr: float = typer.Option(1e-3, "--lr", help="Learning rate"),
     verbose: bool = typer.Option(False, "--verbose", "-v", help="Show detailed metrics"),
     save_probes: bool = typer.Option(True, "--save-probes/--no-save-probes", help="Save trained probes"),
-    control: bool = typer.Option(False, "--control", "-c", help="Run control task with shuffled labels"),
+    control: bool = typer.Option(False, "--control", "-c", help="Run control task only (Hewitt-style)"),
+    with_selectivity: bool = typer.Option(False, "--with-selectivity", "-s", help="Run both tasks and compute selectivity (2x time)"),
 ):
     """Train MLP probes and evaluate accuracy.
 
-    Use --control to run a sanity check with shuffled labels.
-    If the probe performs well on shuffled labels, it has too much capacity.
+    Use --control to run Hewitt-style control task only.
+    Use --with-selectivity to run both and compute selectivity (takes 2x time).
 
     Expects separate train/ and test/ subdirectories with extracted hidden states.
     """
@@ -527,39 +540,84 @@ def main(
             y_train = y_train_all.copy()
             y_test = y_test_all.copy()
 
-            # Control task: shuffle labels to verify probe isn't memorizing
-            if control:
-                rng = np.random.RandomState(42 + layer_idx)
-                y_train = rng.permutation(y_train)
-                y_test = rng.permutation(y_test)
-
-            try:
+            # Generate Hewitt-style control labels if needed
+            if control or with_selectivity:
                 if is_multi_label:
-                    result = train_mlp_probe_multi_label(
-                        X_train, y_train, X_test, y_test,
-                        n_labels=n_classes,
-                        hidden_dim=hidden_dim,
-                        epochs=epochs,
-                        batch_size=batch_size,
-                        lr=lr,
-                        device=device,
+                    n_labels_ctrl = y_train.shape[1]
+                    y_train_ctrl, y_test_ctrl = create_matched_control_labels_multilabel(
+                        X_train, X_test, n_labels=n_labels_ctrl,
+                        n_bins=100, seed=42 + layer_idx
                     )
                 else:
-                    result = train_mlp_probe(
-                        X_train, y_train, X_test, y_test,
-                        n_classes=n_classes,
-                        hidden_dim=hidden_dim,
-                        epochs=epochs,
-                        batch_size=batch_size,
-                        lr=lr,
-                        device=device,
+                    n_classes_ctrl = len(np.unique(y_train))
+                    y_train_ctrl, y_test_ctrl = create_matched_control_labels(
+                        X_train, X_test, n_classes=n_classes_ctrl,
+                        n_bins=100, seed=42 + layer_idx
                     )
 
-                probe_results[layer_idx] = result
-                if 'model' in result:
-                    trained_models[layer_idx] = result['model']
+            try:
+                result = None
+                ctrl_result = None
 
-                if verbose and layer_idx == n_layers - 1 and not is_multi_label:
+                # Train on real labels (unless control-only mode)
+                if not control:
+                    if is_multi_label:
+                        result = train_mlp_probe_multi_label(
+                            X_train, y_train, X_test, y_test,
+                            n_labels=n_classes,
+                            hidden_dim=hidden_dim,
+                            epochs=epochs,
+                            batch_size=batch_size,
+                            lr=lr,
+                            device=device,
+                        )
+                    else:
+                        result = train_mlp_probe(
+                            X_train, y_train, X_test, y_test,
+                            n_classes=n_classes,
+                            hidden_dim=hidden_dim,
+                            epochs=epochs,
+                            batch_size=batch_size,
+                            lr=lr,
+                            device=device,
+                        )
+
+                    if result:
+                        probe_results[layer_idx] = result
+                        if 'model' in result:
+                            trained_models[layer_idx] = result['model']
+
+                # Train on control labels (if control mode or selectivity mode)
+                if control or with_selectivity:
+                    if is_multi_label:
+                        ctrl_result = train_mlp_probe_multi_label(
+                            X_train, y_train_ctrl, X_test, y_test_ctrl,
+                            n_labels=n_classes,
+                            hidden_dim=hidden_dim,
+                            epochs=epochs,
+                            batch_size=batch_size,
+                            lr=lr,
+                            device=device,
+                        )
+                    else:
+                        ctrl_result = train_mlp_probe(
+                            X_train, y_train_ctrl, X_test, y_test_ctrl,
+                            n_classes=n_classes,
+                            hidden_dim=hidden_dim,
+                            epochs=epochs,
+                            batch_size=batch_size,
+                            lr=lr,
+                            device=device,
+                        )
+
+                # Store selectivity info if available
+                if with_selectivity and result and ctrl_result:
+                    real_acc = result.get('test_acc', 0)
+                    ctrl_acc = ctrl_result.get('test_acc', 0)
+                    result['control_acc'] = ctrl_acc
+                    result['selectivity'] = real_acc - ctrl_acc
+
+                if verbose and layer_idx == n_layers - 1 and not is_multi_label and result:
                     print(f"\n  Confusion matrix (layer {layers[layer_idx]}):")
                     cm = confusion_matrix(result['y_test'], result['y_pred'])
                     print(f"  {cm}")
