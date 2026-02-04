@@ -78,6 +78,7 @@ ssh $SSH_OPTS "$SSH_HOST" "
         echo 'Cloning fresh...'
         rm -rf interpretability_experiments
         git clone $REPO_URL
+        git checkout prod_test
     fi
 "
 success "Repository ready"
