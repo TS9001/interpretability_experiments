@@ -194,6 +194,11 @@ def main(
         ground_truth_ops = example.get('ground_truth_operations', [])
         ground_truth_result = example.get('ground_truth_final_result')
 
+        # Skip examples with no ground truth operations (e.g., algebraic problems without <<>> brackets)
+        if not ground_truth_ops:
+            stats['no_gt_operations'] += 1
+            continue
+
         # Filter to probeable responses
         probeable_responses = []
         for resp_idx, resp in enumerate(example.get('responses', [])):

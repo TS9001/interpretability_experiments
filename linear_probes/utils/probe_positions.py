@@ -117,8 +117,9 @@ def get_coarse_bin(value: float) -> int:
 
 
 def get_difficulty_bin(total_operations: int) -> int:
-    """Get difficulty bin for A2 probe (1, 2, 3, 4, 5+)."""
-    return min(total_operations, 5) - 1
+    """Get difficulty bin for A2 probe (1, 2, 3, 4, 5+). Returns 0-4."""
+    # Ensure at least 1 operation to avoid negative labels
+    return min(max(total_operations, 1), 5) - 1
 
 
 def get_step_position(step_idx: int, total_steps: int) -> int:

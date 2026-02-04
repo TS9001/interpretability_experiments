@@ -72,13 +72,13 @@ header "Step 1: Clone Repository"
 ssh $SSH_OPTS "$SSH_HOST" "
     cd $REMOTE_WORKSPACE
     if [ -d interpretability_experiments/.git ]; then
-        echo 'Repo exists, pulling...'
-        cd interpretability_experiments && git pull
+        echo 'Repo exists, switching to prod_test and pulling...'
+        cd interpretability_experiments && git fetch origin && git checkout prod_test && git pull origin prod_test
     else
         echo 'Cloning fresh...'
         rm -rf interpretability_experiments
         git clone $REPO_URL
-        git checkout prod_test
+        cd interpretability_experiments && git checkout prod_test
     fi
 "
 success "Repository ready"
@@ -175,7 +175,8 @@ ssh $SSH_OPTS "$SSH_HOST" "
         python 04_extract_hidden_states.py \\
             --input \"responses/Qwen2.5-Math-1.5B/\${SPLIT}_responses_analyzed_probeable.json\" \\
             --split \$SPLIT \\
-            --layers $LAYERS
+            --layers $LAYERS \\
+            --no-flash-attn
     done
 "
 success "Pipeline complete"
