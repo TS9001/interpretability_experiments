@@ -51,7 +51,8 @@ from sklearn.linear_model import LogisticRegression
 from sklearn.preprocessing import StandardScaler
 from sklearn.model_selection import StratifiedKFold, cross_val_score
 from sklearn.metrics import (
-    accuracy_score, f1_score, roc_auc_score, confusion_matrix
+    accuracy_score, balanced_accuracy_score, f1_score, matthews_corrcoef,
+    roc_auc_score, confusion_matrix,
 )
 
 from utils.data import load_json, save_json
@@ -228,6 +229,10 @@ def train_linear_probe(
     average = 'binary' if n_classes == 2 else 'macro'
     test_f1 = f1_score(y_test, y_test_pred, average=average, zero_division=0)
 
+    # Balanced accuracy and MCC (imbalance-robust metrics)
+    test_balanced_acc = balanced_accuracy_score(y_test, y_test_pred)
+    test_mcc = matthews_corrcoef(y_test, y_test_pred)
+
     # AUC (only for binary or when we have probabilities)
     test_auc = None
     if n_classes == 2:
@@ -247,6 +252,8 @@ def train_linear_probe(
         'train_acc': train_acc,
         'test_acc': test_acc,
         'test_f1': test_f1,
+        'test_balanced_acc': test_balanced_acc,
+        'test_mcc': test_mcc,
         'test_auc': test_auc,
         'n_train': len(X_train),
         'n_test': len(X_test),
@@ -278,6 +285,8 @@ def train_multi_label_probe(
     models = []
     test_accs = []
     f1_scores = []
+    balanced_accs = []
+    mccs = []
 
     for label_idx in range(n_labels):
         y_train_label = y_train[:, label_idx]
@@ -298,10 +307,14 @@ def train_multi_label_probe(
 
             acc = accuracy_score(y_test_label, y_pred)
             f1 = f1_score(y_test_label, y_pred, average='binary', zero_division=0)
+            bal_acc = balanced_accuracy_score(y_test_label, y_pred)
+            mcc = matthews_corrcoef(y_test_label, y_pred)
 
             test_accs.append(acc)
             f1_scores.append(f1)
-            label_results.append({'test_acc': acc, 'f1': f1})
+            balanced_accs.append(bal_acc)
+            mccs.append(mcc)
+            label_results.append({'test_acc': acc, 'f1': f1, 'balanced_acc': bal_acc, 'mcc': mcc})
             models.append(clf)
         except Exception as e:
             log.warning(f"Label {label_idx} training failed: {e}")
@@ -315,6 +328,8 @@ def train_multi_label_probe(
         'train_acc': np.mean(test_accs),  # Approximation
         'test_acc': np.mean(test_accs),
         'mean_f1': np.mean(f1_scores),
+        'test_balanced_acc': np.mean(balanced_accs),
+        'test_mcc': np.mean(mccs),
         'n_train': len(X_train),
         'n_test': len(X_test),
         'label_results': label_results,
@@ -342,9 +357,9 @@ def print_results_table(
     print(f"{'='*80}")
 
     if is_multi_label:
-        header = f"{'Layer':>6} {'Test Acc':>9} {'Mean F1':>8} {'vs Maj':>8}"
+        header = f"{'Layer':>6} {'Test Acc':>9} {'Mean F1':>8} {'BalAcc':>7} {'MCC':>7} {'vs Maj':>8}"
     else:
-        header = f"{'Layer':>6} {'Test Acc':>9} {'Train':>7} {'F1':>7} {'AUC':>7} {'vs Maj':>8}"
+        header = f"{'Layer':>6} {'Test Acc':>9} {'Train':>7} {'F1':>7} {'BalAcc':>7} {'MCC':>7} {'AUC':>7} {'vs Maj':>8}"
 
     if show_selectivity:
         header += f" {'Control':>8} {'Select':>8}"
@@ -359,16 +374,18 @@ def print_results_table(
         test_acc = r['test_acc']
         vs_maj = test_acc - majority_baseline
         sign = '+' if vs_maj > 0 else ''
+        bal_acc = r.get('test_balanced_acc', 0)
+        mcc = r.get('test_mcc', 0)
 
         if is_multi_label:
             mean_f1 = r.get('mean_f1', 0)
-            line = f"{layer:>6} {test_acc:>9.1%} {mean_f1:>8.3f} {sign}{vs_maj:>7.1%}"
+            line = f"{layer:>6} {test_acc:>9.1%} {mean_f1:>8.3f} {bal_acc:>7.3f} {mcc:>7.3f} {sign}{vs_maj:>7.1%}"
         else:
             train_acc = r.get('train_acc', test_acc)
             f1 = r.get('test_f1', 0)
             auc = r.get('test_auc')
             auc_str = f"{auc:.3f}" if auc else "N/A"
-            line = f"{layer:>6} {test_acc:>9.1%} {train_acc:>7.1%} {f1:>7.3f} {auc_str:>7} {sign}{vs_maj:>7.1%}"
+            line = f"{layer:>6} {test_acc:>9.1%} {train_acc:>7.1%} {f1:>7.3f} {bal_acc:>7.3f} {mcc:>7.3f} {auc_str:>7} {sign}{vs_maj:>7.1%}"
 
         if show_selectivity:
             ctrl_acc = r.get('control_acc')
@@ -674,6 +691,8 @@ def main(
         best_layer_idx = max(results.keys(), key=lambda k: results[k]['test_acc'])
         best_acc = results[best_layer_idx]['test_acc']
         best_f1 = results[best_layer_idx].get('test_f1', 0)
+        best_balanced_acc = results[best_layer_idx].get('test_balanced_acc', 0)
+        best_mcc = results[best_layer_idx].get('test_mcc', 0)
         best_auc = results[best_layer_idx].get('test_auc')
 
         # Get selectivity if available
@@ -684,6 +703,8 @@ def main(
             'best_layer': layers[best_layer_idx],
             'best_acc': best_acc,
             'best_f1': best_f1,
+            'best_balanced_acc': best_balanced_acc,
+            'best_mcc': best_mcc,
             'best_auc': best_auc,
             'vs_baseline': best_acc - baseline,
             'majority_baseline': baseline,
@@ -716,7 +737,9 @@ def main(
         if with_selectivity and best_selectivity is not None:
             print(f"  Selectivity: {best_selectivity:+.1%} (control: {best_ctrl_acc:.1%})")
         if best_auc:
-            print(f"  AUC: {best_auc:.3f}, F1: {best_f1:.3f}")
+            print(f"  AUC: {best_auc:.3f}, F1: {best_f1:.3f}, BalAcc: {best_balanced_acc:.3f}, MCC: {best_mcc:.3f}")
+        else:
+            print(f"  F1: {best_f1:.3f}, BalAcc: {best_balanced_acc:.3f}, MCC: {best_mcc:.3f}")
 
     # Save results
     if with_selectivity:
@@ -734,6 +757,8 @@ def main(
                         'test_acc': float(v['test_acc']),
                         'train_acc': float(v.get('train_acc', v['test_acc'])),
                         'f1': float(v['test_f1']) if v.get('test_f1') is not None else None,
+                        'balanced_acc': float(v['test_balanced_acc']) if v.get('test_balanced_acc') is not None else None,
+                        'mcc': float(v['test_mcc']) if v.get('test_mcc') is not None else None,
                         'auc': float(v['test_auc']) if v.get('test_auc') is not None else None,
                         'control_acc': float(v['control_acc']) if v.get('control_acc') is not None else None,
                         'selectivity': float(v['selectivity']) if v.get('selectivity') is not None else None,

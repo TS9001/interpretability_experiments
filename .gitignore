@@ -223,3 +223,6 @@ linear_probes/resources/
 
 # Local configs (SSH keys, credentials, etc.)
 configs/
+
+# Planning files
+planing/
