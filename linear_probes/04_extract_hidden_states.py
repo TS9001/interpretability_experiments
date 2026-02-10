@@ -49,9 +49,9 @@ ALL_PROBES = [
     # Category A - Problem Understanding
     'A1', 'A2',
     # Category B - Numerical Representation
-    'B1', 'B2',
+    'B1', 'B2', 'B1_b', 'B1_b2', 'B2_b',
     # Category C - Computation Mechanics
-    'C1', 'C3_add', 'C3_sub', 'C3_mult', 'C3_div', 'C4',
+    'C1', 'C3_add', 'C3_sub', 'C3_mult', 'C3_div', 'C4', 'C1_b',
     # Category D - Sequential Reasoning
     'D1', 'D2', 'D3', 'D6',
 ]
@@ -139,6 +139,11 @@ def collect_probe_samples(
         operator_pos = op['operator_pos'] + prompt_len
         result_pos = op['result_pos'] + prompt_len
 
+        # End positions for multi-token numbers (fallback to start if not available)
+        op1_end_pos = op.get('operand1_end_pos', op['operand1_pos']) + prompt_len
+        op2_end_pos = op.get('operand2_end_pos', op['operand2_pos']) + prompt_len
+        result_end_pos = op.get('result_end_pos', op['result_pos']) + prompt_len
+
         op_type = op['operator']
         is_correct = op.get('is_correct', True)
         step_label = get_step_position(op_idx, total_ops)
@@ -160,6 +165,37 @@ def collect_probe_samples(
             if op2_pos in pos_to_idx:
                 idx = pos_to_idx[op2_pos]
                 samples['B1'].append({
+                    'hidden': hidden_states[:, idx, :],
+                    'label': get_magnitude_bin(op['operand2']),
+                    'value': op['operand2'],
+                    'op_type': op_type,
+                })
+
+        # B1_b: Operand1 magnitude at operator position
+        if 'B1_b' in probe_list and operator_pos in pos_to_idx:
+            idx = pos_to_idx[operator_pos]
+            samples['B1_b'].append({
+                'hidden': hidden_states[:, idx, :],
+                'label': get_magnitude_bin(op['operand1']),
+                'value': op['operand1'],
+                'op_type': op_type,
+            })
+
+        # B1_b2: Operand magnitude at first token AFTER the full operand span
+        if 'B1_b2' in probe_list:
+            op1_shifted = op1_end_pos + 1
+            if op1_shifted in pos_to_idx:
+                idx = pos_to_idx[op1_shifted]
+                samples['B1_b2'].append({
+                    'hidden': hidden_states[:, idx, :],
+                    'label': get_magnitude_bin(op['operand1']),
+                    'value': op['operand1'],
+                    'op_type': op_type,
+                })
+            op2_shifted = op2_end_pos + 1
+            if op2_shifted in pos_to_idx:
+                idx = pos_to_idx[op2_shifted]
+                samples['B1_b2'].append({
                     'hidden': hidden_states[:, idx, :],
                     'label': get_magnitude_bin(op['operand2']),
                     'value': op['operand2'],
@@ -243,6 +279,27 @@ def collect_probe_samples(
                     'position_type': 'result',
                 })
 
+        # B2_b and C1_b: First token AFTER the full result span
+        result_shifted = result_end_pos + 1
+        if result_shifted in pos_to_idx:
+            shifted_idx = pos_to_idx[result_shifted]
+            shifted_hidden = hidden_states[:, shifted_idx, :]
+
+            if 'B2_b' in probe_list:
+                samples['B2_b'].append({
+                    'hidden': shifted_hidden,
+                    'label': get_magnitude_bin(op['result']),
+                    'value': op['result'],
+                    'op_type': op_type,
+                })
+
+            if 'C1_b' in probe_list:
+                samples['C1_b'].append({
+                    'hidden': shifted_hidden,
+                    'label': 1 if is_correct else 0,
+                    'op_type': op_type,
+                })
+
     return samples
 
 
@@ -285,6 +342,15 @@ def process_batch(
                 positions.add(op['operand2_pos'] + prompt_len)
                 positions.add(op['operator_pos'] + prompt_len)
                 positions.add(op['result_pos'] + prompt_len)
+
+                # Shifted positions for _b probes: first token AFTER the full number span
+                if any(p in probe_list for p in ['B1_b2', 'B2_b', 'C1_b']):
+                    op1_end = op.get('operand1_end_pos', op['operand1_pos'])
+                    op2_end = op.get('operand2_end_pos', op['operand2_pos'])
+                    result_end = op.get('result_end_pos', op['result_pos'])
+                    positions.add(op1_end + prompt_len + 1)
+                    positions.add(op2_end + prompt_len + 1)
+                    positions.add(result_end + prompt_len + 1)
 
             if not positions:
                 continue

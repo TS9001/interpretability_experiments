@@ -104,11 +104,16 @@ def add_probe_metadata(resp: dict, resp_idx: int, example: dict) -> dict:
             'result': op['result'],
             'is_correct': op.get('is_correct', True),
 
-            # Token positions
+            # Token positions (start of each span)
             'operand1_pos': op.get('operand1_positions', [-1])[0],
             'operand2_pos': op.get('operand2_positions', [-1])[0],
             'operator_pos': op.get('operator_positions', [-1])[0],
             'result_pos': op.get('result_positions', [-1])[0],
+
+            # End positions (last token of each span, for multi-token numbers)
+            'operand1_end_pos': op.get('operand1_end_positions', op.get('operand1_positions', [-1]))[0],
+            'operand2_end_pos': op.get('operand2_end_positions', op.get('operand2_positions', [-1]))[0],
+            'result_end_pos': op.get('result_end_positions', op.get('result_positions', [-1]))[0],
 
             # Sequence metadata for D-probes
             'op_index': idx,

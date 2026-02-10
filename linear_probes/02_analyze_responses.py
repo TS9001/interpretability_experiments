@@ -159,12 +159,13 @@ def format_number_for_search(num: float) -> str:
     return str(num)
 
 
-def find_number_in_tokens(tokens: list[str], num: float, start_pos: int = 0) -> int:
+def find_number_in_tokens(tokens: list[str], num: float, start_pos: int = 0) -> tuple[int, int]:
     """
     Find a number in tokens starting from start_pos.
-    Returns the token position where the number starts, or -1 if not found.
+    Returns (start, end) token positions of the number span, or (-1, -1) if not found.
 
     Numbers can span multiple tokens (e.g., "48" might be ["4", "8"]).
+    For single-token matches, start == end.
     """
     target = format_number_for_search(num)
 
@@ -172,14 +173,14 @@ def find_number_in_tokens(tokens: list[str], num: float, start_pos: int = 0) -> 
     for i in range(start_pos, len(tokens)):
         normalized = normalize_token(tokens[i])
         if normalized == target:
-            return i
+            return (i, i)
 
     # Check if number is embedded in a larger token (but non-empty match)
     for i in range(start_pos, len(tokens)):
         normalized = normalize_token(tokens[i])
         # Must have actual content and the target must be a significant match
         if normalized and target in normalized and len(target) > 0:
-            return i
+            return (i, i)
 
     # Try to find as consecutive tokens (for multi-digit numbers)
     for i in range(start_pos, len(tokens)):
@@ -193,12 +194,12 @@ def find_number_in_tokens(tokens: list[str], num: float, start_pos: int = 0) -> 
         for j in range(i, min(i + len(target) + 2, len(tokens))):
             combined += normalize_token(tokens[j])
             if combined == target:
-                return i
+                return (i, j)
             # Also check if we've built the target as a prefix (before more digits)
             if combined.startswith(target) and (len(combined) == len(target) or not combined[len(target)].isdigit()):
-                return i
+                return (i, j)
 
-    return -1
+    return (-1, -1)
 
 
 def find_operator_in_tokens(tokens: list[str], op_type: str, start_pos: int = 0) -> int:
@@ -260,23 +261,26 @@ def find_token_positions_sequential(
         start_token = char_to_token.get(char_start, 0)
 
         # Search for operand1 starting from the operation's character position
-        op1_pos = find_number_in_tokens(tokens, operand1, start_token) if operand1 is not None else -1
-        op['operand1_positions'] = [op1_pos]
+        op1_start, op1_end = find_number_in_tokens(tokens, operand1, start_token) if operand1 is not None else (-1, -1)
+        op['operand1_positions'] = [op1_start]
+        op['operand1_end_positions'] = [op1_end]
 
         # Search for operator (start from after operand1 if found)
-        search_start = op1_pos + 1 if op1_pos >= 0 else start_token
+        search_start = op1_end + 1 if op1_end >= 0 else start_token
         operator_pos = find_operator_in_tokens(tokens, operator, search_start) if operator else -1
         op['operator_positions'] = [operator_pos]
 
         # Search for operand2 (start from after operator if found)
         search_start = operator_pos + 1 if operator_pos >= 0 else search_start
-        op2_pos = find_number_in_tokens(tokens, operand2, search_start) if operand2 is not None else -1
-        op['operand2_positions'] = [op2_pos]
+        op2_start, op2_end = find_number_in_tokens(tokens, operand2, search_start) if operand2 is not None else (-1, -1)
+        op['operand2_positions'] = [op2_start]
+        op['operand2_end_positions'] = [op2_end]
 
         # Search for result (start from after operand2 if found)
-        search_start = op2_pos + 1 if op2_pos >= 0 else search_start
-        result_pos = find_number_in_tokens(tokens, result, search_start) if result is not None else -1
-        op['result_positions'] = [result_pos]
+        search_start = op2_end + 1 if op2_end >= 0 else search_start
+        result_start, result_end = find_number_in_tokens(tokens, result, search_start) if result is not None else (-1, -1)
+        op['result_positions'] = [result_start]
+        op['result_end_positions'] = [result_end]
 
     return operations
 

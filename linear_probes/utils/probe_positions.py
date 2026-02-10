@@ -16,9 +16,13 @@ PROBE_POSITION_MAP = {
     # Category B: Numerical Representation
     'B1': 'operand_tokens',
     'B2': 'result_tokens',
+    'B1_b': 'operator_tokens',           # operand1 magnitude at operator position
+    'B1_b2': 'operand_shifted_tokens',   # operand magnitude at operand_pos+1
+    'B2_b': 'result_boundary_tokens',    # result magnitude at result_pos+1
 
     # Category C: Computation Mechanics
     'C1': 'result_tokens',
+    'C1_b': 'result_boundary_tokens',    # correctness at result_pos+1
     'C3': 'result_tokens',
     'C4': 'equals_tokens',
 

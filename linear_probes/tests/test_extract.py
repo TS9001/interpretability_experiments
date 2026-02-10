@@ -156,15 +156,15 @@ class TestAllProbes:
         """Check that all expected probes are in ALL_PROBES."""
         expected = [
             'A1', 'A2',
-            'B1', 'B2',
-            'C1', 'C3_add', 'C3_sub', 'C3_mult', 'C3_div', 'C4',
+            'B1', 'B2', 'B1_b', 'B1_b2', 'B2_b',
+            'C1', 'C3_add', 'C3_sub', 'C3_mult', 'C3_div', 'C4', 'C1_b',
             'D1', 'D2', 'D3', 'D6',
         ]
         assert ALL_PROBES == expected
 
     def test_probe_count(self):
-        """Should have 14 probes defined."""
-        assert len(ALL_PROBES) == 14
+        """Should have 18 probes defined."""
+        assert len(ALL_PROBES) == 18
 
     def test_no_duplicates(self):
         """No duplicate probes."""

@@ -113,30 +113,42 @@ class TestFindNumberInTokens:
 
     def test_single_token(self):
         tokens = ['The', 'answer', 'is', '42']
-        pos = find_number_in_tokens(tokens, 42.0)
-        assert pos == 3
+        start, end = find_number_in_tokens(tokens, 42.0)
+        assert start == 3
+        assert end == 3
 
     def test_with_start_pos(self):
         tokens = ['5', 'plus', '5', 'equals', '10']
-        pos = find_number_in_tokens(tokens, 5.0, start_pos=2)
-        assert pos == 2
+        start, end = find_number_in_tokens(tokens, 5.0, start_pos=2)
+        assert start == 2
+        assert end == 2
 
     def test_not_found(self):
         tokens = ['no', 'numbers', 'here']
-        pos = find_number_in_tokens(tokens, 42.0)
-        assert pos == -1
+        start, end = find_number_in_tokens(tokens, 42.0)
+        assert start == -1
+        assert end == -1
 
     def test_integer_vs_float(self):
         """Integer 42 should match whether searching for 42 or 42.0."""
         tokens = ['value', 'is', '42']
-        pos = find_number_in_tokens(tokens, 42.0)
-        assert pos == 2
+        start, end = find_number_in_tokens(tokens, 42.0)
+        assert start == 2
+        assert end == 2
 
     def test_embedded_in_token(self):
         """Number embedded in larger token."""
         tokens = ['value=42']
-        pos = find_number_in_tokens(tokens, 42.0)
-        assert pos == 0
+        start, end = find_number_in_tokens(tokens, 42.0)
+        assert start == 0
+        assert end == 0
+
+    def test_multi_token_number(self):
+        """Multi-token number should return span (start, end)."""
+        tokens = ['total', 'is', '1', '6', '0', 'dollars']
+        start, end = find_number_in_tokens(tokens, 160.0)
+        assert start == 2
+        assert end == 4
 
 
 class TestFindOperatorInTokens:

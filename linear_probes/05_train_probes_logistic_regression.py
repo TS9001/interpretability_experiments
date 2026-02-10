@@ -86,8 +86,12 @@ ALL_PROBE_INFO = {
     # Category B - Numerical Representation
     'B1': {'name': 'Operand Magnitude', 'type': 'classification', 'n_classes': 6},
     'B2': {'name': 'Result Magnitude', 'type': 'classification', 'n_classes': 6},
+    'B1_b': {'name': 'Operand1 Mag (operator pos)', 'type': 'classification', 'n_classes': 6},
+    'B1_b2': {'name': 'Operand Mag (shifted +1)', 'type': 'classification', 'n_classes': 6},
+    'B2_b': {'name': 'Result Mag (boundary)', 'type': 'classification', 'n_classes': 6},
     # Category C - Computation Mechanics
     'C1': {'name': 'Correctness', 'type': 'classification', 'n_classes': 2},
+    'C1_b': {'name': 'Correctness (boundary)', 'type': 'classification', 'n_classes': 2},
     'C3_add': {'name': 'Add Correctness', 'type': 'classification', 'n_classes': 2},
     'C3_sub': {'name': 'Sub Correctness', 'type': 'classification', 'n_classes': 2},
     'C3_mult': {'name': 'Mult Correctness', 'type': 'classification', 'n_classes': 2},
