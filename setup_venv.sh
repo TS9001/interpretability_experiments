@@ -72,7 +72,8 @@ echo "Installing core requirements..."
     scikit-learn>=1.3.0 \
     numpy>=1.24.0 \
     tqdm>=4.65.0 \
-    loguru
+    loguru \
+    trl>=0.15.0
 
 echo ""
 echo "=========================================="

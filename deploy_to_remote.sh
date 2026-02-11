@@ -101,6 +101,7 @@ EXCLUDES=(
     --exclude 'cache/'
     --exclude '*.pt'
     --exclude '*.pth'
+    --exclude 'rl/checkpoints/'
 )
 
 # Additional excludes for code-only mode

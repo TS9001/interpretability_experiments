@@ -226,3 +226,6 @@ configs/
 
 # Planning files
 planing/
+
+# RL training checkpoints
+rl/checkpoints/
