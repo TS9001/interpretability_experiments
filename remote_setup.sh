@@ -56,7 +56,7 @@ else
     log "Using key layers: $LAYERS"
 fi
 SSH_PORT=$(echo "$SSH_CMD" | grep -oE '\-p\s*[0-9]+' | grep -oE '[0-9]+' || echo "22")
-SSH_HOST=$(echo "$SSH_CMD" | grep -oE '[a-zA-Z0-9_]+@[0-9.]+')
+SSH_HOST=$(echo "$SSH_CMD" | grep -oE '[a-zA-Z0-9_]+@[a-zA-Z0-9._-]+')
 SSH_KEY=$(echo "$SSH_CMD" | grep -oE '\-i\s*[^ ]+' | sed 's/-i\s*//')
 
 [ -z "$SSH_HOST" ] && error "Could not parse host from: $SSH_CMD"
