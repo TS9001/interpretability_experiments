@@ -104,7 +104,7 @@ def main(
     model: str = typer.Option(MODEL_NAME, help="Model name or path"),
     epochs: int = typer.Option(1, help="Number of training epochs"),
     lr: float = typer.Option(1e-6, help="Learning rate"),
-    batch_size: int = typer.Option(8, help="Per-device batch size"),
+    batch_size: int = typer.Option(16, help="Per-device batch size"),
     num_generations: int = typer.Option(8, help="Number of generations per prompt (G in GRPO)"),
     grad_accum: int = typer.Option(4, help="Gradient accumulation steps"),
     max_new_tokens: int = typer.Option(512, help="Max tokens to generate"),
@@ -186,7 +186,7 @@ def main(
         save_total_limit=None,
         # Logging
         logging_steps=10,
-        report_to="none",
+        report_to="tensorboard",
     )
 
     # ---- Trainer ----

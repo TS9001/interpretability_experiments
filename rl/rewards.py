@@ -18,9 +18,12 @@ def extract_final_answer(text: str) -> float | None:
         return float(match.group(1).replace(",", ""))
 
     # Fallback: last number in text
-    numbers = re.findall(r"[+-]?[\d,]+\.?\d*", text)
+    numbers = re.findall(r"[+-]?\d[\d,]*\.?\d*", text)
     if numbers:
-        return float(numbers[-1].replace(",", ""))
+        try:
+            return float(numbers[-1].replace(",", ""))
+        except ValueError:
+            return None
 
     return None
 
