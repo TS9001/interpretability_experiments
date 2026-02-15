@@ -372,7 +372,7 @@ def print_results_table(
         header = f"{'Layer':>6} {'Test Acc':>9} {'Train':>7} {'F1':>7} {'MacF1':>7} {'BalAcc':>7} {'MCC':>7} {'AUC':>7} {'vs Maj':>8}"
 
     if show_selectivity:
-        header += f" {'Control':>8} {'Select':>8} {'BalSel':>8}"
+        header += f" {'Control':>8} {'Select':>8} {'BalSel':>8} {'MccSel':>8}"
     print(header)
     print("-" * len(header))
 
@@ -402,6 +402,7 @@ def print_results_table(
             ctrl_acc = r.get('control_acc')
             selectivity = r.get('selectivity')
             sel_bal = r.get('selectivity_balanced')
+            sel_mcc = r.get('selectivity_mcc')
             if ctrl_acc is not None and selectivity is not None:
                 sel_sign = '+' if selectivity > 0 else ''
                 line += f" {ctrl_acc:>8.1%} {sel_sign}{selectivity:>7.1%}"
@@ -410,8 +411,13 @@ def print_results_table(
                     line += f" {bal_sel_sign}{sel_bal:>7.1%}"
                 else:
                     line += f" {'N/A':>8}"
+                if sel_mcc is not None:
+                    mcc_sel_sign = '+' if sel_mcc > 0 else ''
+                    line += f" {mcc_sel_sign}{sel_mcc:>7.3f}"
+                else:
+                    line += f" {'N/A':>8}"
             else:
-                line += f" {'N/A':>8} {'N/A':>8} {'N/A':>8}"
+                line += f" {'N/A':>8} {'N/A':>8} {'N/A':>8} {'N/A':>8}"
 
         print(line)
 
@@ -643,7 +649,13 @@ def main(
                         selectivity_bal = real_bal_acc - ctrl_bal_acc
                         result['control_balanced_acc'] = ctrl_bal_acc
                         result['selectivity_balanced'] = selectivity_bal
-                        print(f"acc={real_acc:.1%} ctrl={ctrl_acc:.1%} sel={selectivity:+.1%} bal_sel={selectivity_bal:+.1%}", flush=True)
+                        # MCC selectivity
+                        real_mcc = result.get('test_mcc', 0)
+                        ctrl_mcc = ctrl_result.get('test_mcc', 0)
+                        selectivity_mcc = real_mcc - ctrl_mcc
+                        result['control_mcc'] = ctrl_mcc
+                        result['selectivity_mcc'] = selectivity_mcc
+                        print(f"acc={real_acc:.1%} ctrl={ctrl_acc:.1%} sel={selectivity:+.1%} bal_sel={selectivity_bal:+.1%} mcc_sel={selectivity_mcc:+.3f}", flush=True)
                     elif result:
                         print(f"acc={result.get('test_acc', 0):.1%} (ctrl failed)", flush=True)
                     else:
@@ -724,6 +736,8 @@ def main(
         best_selectivity = results[best_layer_idx].get('selectivity')
         best_ctrl_bal_acc = results[best_layer_idx].get('control_balanced_acc')
         best_selectivity_bal = results[best_layer_idx].get('selectivity_balanced')
+        best_ctrl_mcc = results[best_layer_idx].get('control_mcc')
+        best_selectivity_mcc = results[best_layer_idx].get('selectivity_mcc')
 
         summary_data[probe] = {
             'best_layer': layers[best_layer_idx],
@@ -739,6 +753,8 @@ def main(
             'selectivity': best_selectivity,
             'control_balanced_acc': best_ctrl_bal_acc,
             'selectivity_balanced': best_selectivity_bal,
+            'control_mcc': best_ctrl_mcc,
+            'selectivity_mcc': best_selectivity_mcc,
         }
 
         probe_info = ALL_PROBE_INFO.get(probe, {'name': probe})
@@ -765,7 +781,8 @@ def main(
               f"(majority: {baseline:.1%}, +{best_acc - baseline:.1%}) [{status}]")
         if with_selectivity and best_selectivity is not None:
             bal_sel_str = f", bal_sel: {best_selectivity_bal:+.1%}" if best_selectivity_bal is not None else ""
-            print(f"  Selectivity: {best_selectivity:+.1%} (control: {best_ctrl_acc:.1%}){bal_sel_str}")
+            mcc_sel_str = f", mcc_sel: {best_selectivity_mcc:+.3f}" if best_selectivity_mcc is not None else ""
+            print(f"  Selectivity: {best_selectivity:+.1%} (control: {best_ctrl_acc:.1%}){bal_sel_str}{mcc_sel_str}")
         if best_auc:
             print(f"  AUC: {best_auc:.3f}, F1: {best_f1:.3f}, MacF1: {best_f1_macro:.3f}, BalAcc: {best_balanced_acc:.3f}, MCC: {best_mcc:.3f}")
         else:
@@ -795,12 +812,15 @@ def main(
                         'selectivity': float(v['selectivity']) if v.get('selectivity') is not None else None,
                         'control_balanced_acc': float(v['control_balanced_acc']) if v.get('control_balanced_acc') is not None else None,
                         'selectivity_balanced': float(v['selectivity_balanced']) if v.get('selectivity_balanced') is not None else None,
+                        'control_mcc': float(v['control_mcc']) if v.get('control_mcc') is not None else None,
+                        'selectivity_mcc': float(v['selectivity_mcc']) if v.get('selectivity_mcc') is not None else None,
                     }
                     for k, v in data['results'].items()
                 },
                 'best_layer': summary_data.get(probe, {}).get('best_layer'),
                 'best_acc': float(summary_data[probe]['best_acc']) if probe in summary_data else None,
                 'best_selectivity': float(summary_data[probe]['selectivity']) if probe in summary_data and summary_data[probe].get('selectivity') is not None else None,
+                'best_selectivity_mcc': float(summary_data[probe]['selectivity_mcc']) if probe in summary_data and summary_data[probe].get('selectivity_mcc') is not None else None,
                 'majority_baseline': float(data['majority_baseline']),
                 'is_multi_label': data['is_multi_label'],
             }
@@ -845,16 +865,18 @@ def main(
                 print(f"  [WARN] {probe}: {probe_summary['best_acc']:.1%} > chance - may have artifacts")
         elif with_selectivity and selectivity is not None:
             sel_bal = probe_summary.get('selectivity_balanced')
+            sel_mcc = probe_summary.get('selectivity_mcc')
             bal_str = f", bal_sel={sel_bal:+.1%}" if sel_bal is not None else ""
+            mcc_str = f", mcc_sel={sel_mcc:+.3f}" if sel_mcc is not None else ""
             if selectivity > 0.1:
-                print(f"  [HIGH] {probe}: selectivity={selectivity:+.1%} (acc={probe_summary['best_acc']:.1%}, ctrl={probe_summary['control_acc']:.1%}){bal_str}")
+                print(f"  [HIGH] {probe}: selectivity={selectivity:+.1%} (acc={probe_summary['best_acc']:.1%}, ctrl={probe_summary['control_acc']:.1%}){bal_str}{mcc_str}")
                 high_sel_count += 1
             elif selectivity > 0.05:
-                print(f"  [MOD ] {probe}: selectivity={selectivity:+.1%} (acc={probe_summary['best_acc']:.1%}, ctrl={probe_summary['control_acc']:.1%}){bal_str}")
+                print(f"  [MOD ] {probe}: selectivity={selectivity:+.1%} (acc={probe_summary['best_acc']:.1%}, ctrl={probe_summary['control_acc']:.1%}){bal_str}{mcc_str}")
             elif selectivity > 0:
-                print(f"  [LOW ] {probe}: selectivity={selectivity:+.1%} (acc={probe_summary['best_acc']:.1%}, ctrl={probe_summary['control_acc']:.1%}){bal_str}")
+                print(f"  [LOW ] {probe}: selectivity={selectivity:+.1%} (acc={probe_summary['best_acc']:.1%}, ctrl={probe_summary['control_acc']:.1%}){bal_str}{mcc_str}")
             else:
-                print(f"  [NONE] {probe}: selectivity={selectivity:+.1%} - probe may just memorize{bal_str}")
+                print(f"  [NONE] {probe}: selectivity={selectivity:+.1%} - probe may just memorize{bal_str}{mcc_str}")
         else:
             if beats_baseline:
                 print(f"  [PASS] {probe}: {probe_summary['best_acc']:.1%} > majority+10%")
