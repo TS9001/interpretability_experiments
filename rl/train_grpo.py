@@ -108,7 +108,7 @@ def main(
     num_generations: int = typer.Option(8, help="Number of generations per prompt (G in GRPO)"),
     grad_accum: int = typer.Option(4, help="Gradient accumulation steps"),
     max_new_tokens: int = typer.Option(512, help="Max tokens to generate"),
-    num_checkpoints: int = typer.Option(0, help="Evenly-spaced checkpoints (0 = save every epoch)"),
+    num_checkpoints: int = typer.Option(10, help="Evenly-spaced checkpoints (0 = save every epoch)"),
     format_reward: bool = typer.Option(False, help="Include format reward"),
     temperature: float = typer.Option(0.7, help="Sampling temperature for generations"),
     kl_coef: float = typer.Option(0.05, help="KL divergence coefficient"),
